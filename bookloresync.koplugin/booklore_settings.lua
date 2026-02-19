@@ -352,7 +352,7 @@ function Settings:buildConnectionMenu(parent)
             },
             {
                 text = _("Shelf Name for Deletion"),
-                help_text = _("The Booklore shelf that books will be removed from when deleted locally. Default is 'Kobo'. Requires Booklore Account credentials (configured in Import Reading History)."),
+                help_text = _("The Booklore shelf that books will be removed from when deleted locally. Default is 'Kobo'. IMPORTANT: requires your Booklore login  set it first via Import Reading History → Configure Booklore Account."),
                 keep_menu_open = true,
                 callback = function()
                     self:configureShelfName(parent)
