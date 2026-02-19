@@ -473,10 +473,10 @@ Search books by title (fuzzy match)
 --]]
 function APIClient:searchBooks(title)
     self:logInfo("BookloreSync API: Searching books with title:", title)
-    
+
     -- URL encode the title
     local encoded_title = self:_urlEncode(title)
-    local endpoint = "/api/v1/books/search?title=" .. encoded_title
+    local endpoint = "/api/v1/books?title=" .. encoded_title
     
     local success, code, response = self:request("GET", endpoint)
     
@@ -587,9 +587,9 @@ function APIClient:validateBearerToken(token)
     local headers = {
         ["Authorization"] = "Bearer " .. token
     }
-    
+
     -- Use a lightweight endpoint to test the token
-    local success, code, response = self:request("GET", "/api/v1/books/search?title=test&limit=1", nil, headers)
+    local success, code, response = self:request("GET", "/api/v1/books?title=test&limit=1", nil, headers)
     
     -- Token is valid if request succeeds (200) or returns 404 (endpoint exists but no results)
     -- Token is invalid if we get 401/403 (unauthorized)
@@ -623,8 +623,8 @@ function APIClient:searchBooksWithAuth(title, username, password)
     
     -- URL encode the title
     local encoded_title = self:_urlEncode(title)
-    local endpoint = "/api/v1/books/search?title=" .. encoded_title
-    
+    local endpoint = "/api/v1/books?title=" .. encoded_title
+
     -- Make request with Bearer token
     local headers = {
         ["Authorization"] = "Bearer " .. token
@@ -688,8 +688,8 @@ function APIClient:searchBooksByIsbn(isbn, username, password)
     
     -- URL encode the ISBN
     local encoded_isbn = self:_urlEncode(isbn)
-    local endpoint = "/api/v1/books/search?isbn=" .. encoded_isbn
-    
+    local endpoint = "/api/v1/books?isbn=" .. encoded_isbn
+
     -- Make request with Bearer token
     local headers = {
         ["Authorization"] = "Bearer " .. token

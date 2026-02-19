@@ -308,16 +308,16 @@ function BookloreSync:init()
         -- Path 1: Single-file deletion
         local orig_deleteFile = FileManager.deleteFile
         FileManager.deleteFile = function(fm_self, file, is_file)
-            local hash, stem = nil, nil
+            local hash, stem, book_id = nil, nil, nil
             if is_file then
-                hash, stem = booklore_self:preDeleteHook(file)
+                hash, stem, book_id = booklore_self:preDeleteHook(file)
             end
-            
+
             local result = orig_deleteFile(fm_self, file, is_file)
-            
+
             if hash and stem then
                 UIManager:scheduleIn(0.5, function()
-                    booklore_self:notifyBookloreOnDeletion(hash, stem)
+                    booklore_self:notifyBookloreOnDeletion(hash, stem, book_id)
                 end)
             end
             return result
@@ -329,17 +329,17 @@ function BookloreSync:init()
             local to_sync = {}
             for _, file in ipairs(fm_self.selected_files or {}) do
                 local resolved = require("ffi/util").realpath(file)
-                local hash, stem = booklore_self:preDeleteHook(resolved)
+                local hash, stem, book_id = booklore_self:preDeleteHook(resolved)
                 if hash then
-                    table.insert(to_sync, { hash = hash, stem = stem })
+                    table.insert(to_sync, { hash = hash, stem = stem, book_id = book_id })
                 end
             end
-            
+
             local result = orig_deleteSelectedFiles(fm_self)
-            
+
             for _, item in ipairs(to_sync) do
                 UIManager:scheduleIn(0.5, function()
-                    booklore_self:notifyBookloreOnDeletion(item.hash, item.stem)
+                    booklore_self:notifyBookloreOnDeletion(item.hash, item.stem, item.book_id)
                 end)
             end
             return result
@@ -778,7 +778,7 @@ function BookloreSync:addToMainMenu(menu_items)
         sub_item_table = {
             {
                 text = _("Configure Booklore Account"),
-                help_text = _("Configure Booklore username and password for accessing the books/search endpoint."),
+                help_text = _("Configure Booklore username and password for accessing the books API endpoint."),
                 callback = function()
                     self:configureBookloreLogin()
                 end,
@@ -1206,84 +1206,99 @@ function BookloreSync:calculateBookHash(file_path)
 end
 
 --[[--
-Capture hash and stem for a file about to be deleted (synchronous, no network).
+Capture hash, stem, and book_id for a file about to be deleted (synchronous, no network).
 
-Must be called before the file is removed from disk. Returns nil, nil for
-non-EPUB files so that the follow-up network call is skipped.
+Must be called before the file is removed from disk. Returns nil values for
+non-EPUB files so that the follow-up network call is skipped. Attempts to
+retrieve the book_id from the database cache to avoid unnecessary API searches.
 
 @param filepath Absolute path to the file being deleted
 @return string|nil MD5 hash of the file, or nil
 @return string|nil Filename stem (no extension), or nil
+@return number|nil Booklore book ID from cache, or nil
 --]]
 function BookloreSync:preDeleteHook(filepath)
     if not filepath then
-        return nil, nil
+        return nil, nil, nil
     end
-    
+
     -- Only process EPUB files
     local stem = filepath:match("([^/\\]+)%.[Ee][Pp][Uu][Bb]$")
     if not stem then
-        return nil, nil
+        return nil, nil, nil
     end
-    
+
     self:logInfo("BookloreSync: preDeleteHook for:", filepath)
+
+    -- Try to get book_id from database cache first
+    local book_id = nil
+    if self.db then
+        local cached_book = self.db:getBookByFilePath(filepath)
+        if cached_book and cached_book.book_id then
+            book_id = tonumber(cached_book.book_id)
+            self:logInfo("BookloreSync: preDeleteHook — found book_id in cache:", book_id)
+        end
+    end
+
     local hash = self:calculateBookHash(filepath)
     if not hash then
         self:logWarn("BookloreSync: preDeleteHook — could not compute hash for:", filepath)
-        return nil, nil
+        return nil, nil, nil
     end
-    
-    return hash, stem
+
+    return hash, stem, book_id
 end
 
 --[[--
 Remove a book from the configured Booklore shelf after local deletion (asynchronous).
 
-Looks up the book by hash, falls back to title search, then calls the shelf
-management API to unassign the book. All failures are logged and swallowed
-so that a network issue never surfaces as a user-visible error during deletion.
+Uses the cached book_id if available, otherwise falls back to title-based API search.
+All failures are logged and swallowed so that a network issue never surfaces as a
+user-visible error during deletion.
 
 @param hash MD5 hash of the deleted file
 @param stem Filename stem (no extension) used as title fallback
+@param cached_book_id Booklore book ID from database cache (optional)
 --]]
-function BookloreSync:notifyBookloreOnDeletion(hash, stem)
+function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id)
     local ok, err = pcall(function()
         if self.booklore_username == "" or self.booklore_password == "" then
             self:logInfo("BookloreSync: notifyBookloreOnDeletion — Booklore credentials not set, skipping")
             return
         end
-        
-        self:logInfo("BookloreSync: notifyBookloreOnDeletion — hash:", hash, "stem:", stem)
-        
-        -- Step 1: search for book by title
-        -- Note: hash-based lookup via /api/v1/books/by-hash/ uses a different
-        -- hash algorithm than the KoSync fingerprint this plugin computes, so
-        -- it never matches. /api/koreader/books/by-hash/ requires KoSync basic
-        -- auth and only works for users of Booklore's built-in KoSync server.
-        -- Title search via the REST API is the reliable path for all users.
-        local book_id = nil
 
-        -- Search 1: full filename stem (e.g. "Samantha Kolesnik - Waif")
-        self:logInfo("BookloreSync: notifyBookloreOnDeletion — searching by stem:", stem)
-        local search_ok, search_resp = self.api:searchBooksWithAuth(stem, self.booklore_username, self.booklore_password)
-        self:logInfo("BookloreSync: notifyBookloreOnDeletion — stem search ok:", tostring(search_ok), "count:", tostring(type(search_resp) == "table" and #search_resp or "n/a"), "raw:", tostring(search_resp))
-        if search_ok and type(search_resp) == "table" and search_resp[1] and search_resp[1].id then
-            book_id = tonumber(search_resp[1].id)
-            self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by stem search, ID:", book_id)
-        else
-            -- Search 2: title-only portion from "Author - Title" filename pattern
-            local title_part = stem:match("^.+ %- (.+)$")
-            if title_part then
-                self:logInfo("BookloreSync: notifyBookloreOnDeletion — retrying search with title:", title_part)
-                local title_ok, title_resp = self.api:searchBooksWithAuth(title_part, self.booklore_username, self.booklore_password)
-                self:logInfo("BookloreSync: notifyBookloreOnDeletion — title search ok:", tostring(title_ok), "count:", tostring(type(title_resp) == "table" and #title_resp or "n/a"), "raw:", tostring(title_resp))
-                if title_ok and type(title_resp) == "table" and title_resp[1] and title_resp[1].id then
-                    book_id = tonumber(title_resp[1].id)
-                    self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by title search, ID:", book_id)
+        self:logInfo("BookloreSync: notifyBookloreOnDeletion — hash:", hash, "stem:", stem, "cached_book_id:", cached_book_id)
+
+        local book_id = cached_book_id
+
+        -- If we don't have a cached book_id, fall back to API search
+        if not book_id then
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — no cached book_id, searching via API")
+
+            -- Search 1: full filename stem (e.g. "Samantha Kolesnik - Waif")
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — searching by stem:", stem)
+            local search_ok, search_resp = self.api:searchBooksWithAuth(stem, self.booklore_username, self.booklore_password)
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — stem search ok:", tostring(search_ok), "count:", tostring(type(search_resp) == "table" and #search_resp or "n/a"), "raw:", tostring(search_resp))
+            if search_ok and type(search_resp) == "table" and search_resp[1] and search_resp[1].id then
+                book_id = tonumber(search_resp[1].id)
+                self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by stem search, ID:", book_id)
+            else
+                -- Search 2: title-only portion from "Author - Title" filename pattern
+                local title_part = stem:match("^.+ %- (.+)$")
+                if title_part then
+                    self:logInfo("BookloreSync: notifyBookloreOnDeletion — retrying search with title:", title_part)
+                    local title_ok, title_resp = self.api:searchBooksWithAuth(title_part, self.booklore_username, self.booklore_password)
+                    self:logInfo("BookloreSync: notifyBookloreOnDeletion — title search ok:", tostring(title_ok), "count:", tostring(type(title_resp) == "table" and #title_resp or "n/a"), "raw:", tostring(title_resp))
+                    if title_ok and type(title_resp) == "table" and title_resp[1] and title_resp[1].id then
+                        book_id = tonumber(title_resp[1].id)
+                        self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by title search, ID:", book_id)
+                    end
                 end
             end
+        else
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — using cached book_id:", book_id)
         end
-        
+
         if not book_id then
             self:logWarn("BookloreSync: notifyBookloreOnDeletion — book not found on server, skipping shelf removal")
             return
