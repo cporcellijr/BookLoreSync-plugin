@@ -46,6 +46,7 @@ end
 -- Stub the require machinery
 local real_require = require
 package.preload["ffi/sha2"] = function() return { md5 = fake_md5 } end
+package.preload["json"] = function() return { empty_array = { __jsontype = "array" } } end
 package.preload["logger"]   = function()
     return {
         info = function(...) end,
@@ -120,6 +121,7 @@ local function make_plugin(overrides)
     -- Real notifyBookloreOnDeletion (verbatim from our new code in main.lua)
     function self:notifyBookloreOnDeletion(hash, stem)
         local ok_pcall, err = pcall(function()
+            local json = require("json")
             if self.booklore_username == "" or self.booklore_password == "" then
                 self:logInfo("notifyBookloreOnDeletion — credentials not set, skipping")
                 return
@@ -188,6 +190,7 @@ local function make_plugin(overrides)
             local payload = {
                 bookIds           = { book_id },
                 shelvesToUnassign = { shelf_id },
+                shelvesToAssign   = json.empty_array,
             }
             local remove_ok, remove_code, remove_resp = self.api:request("POST", "/api/v1/books/shelves", payload, headers)
             if remove_ok then
@@ -422,7 +425,7 @@ do
     ok(post_body ~= nil,                         "POST /api/v1/books/shelves was called")
     ok(post_body.bookIds[1] == 42,               "POST payload contains correct book ID")
     ok(post_body.shelvesToUnassign[1] == 7,      "POST payload unassigns correct shelf ID")
-    ok(post_body.shelvesToAssign == nil,          "POST payload shelvesToAssign is omitted")
+    ok(post_body.shelvesToAssign ~= nil,          "POST payload shelvesToAssign is a non-nil empty array")
 end
 
 -- ─── 8. notifyBookloreOnDeletion: fallback to title search ───────────────────
@@ -548,7 +551,7 @@ do
     local plugin = make_plugin({ api = api_happy_path(opts), booklore_shelf_name = "MyCustomShelf" })
     plugin:notifyBookloreOnDeletion("hash1", "book1")
     ok(opts._last_post ~= nil,                    "POST fired for custom shelf name")
-    ok(opts._last_post.shelvesToAssign == nil, "shelvesToAssign is omitted")
+    ok(opts._last_post.shelvesToAssign ~= nil, "shelvesToAssign is a non-nil empty array")
     ok(opts._last_post.shelvesToUnassign[1] == 20, "correct custom shelf ID unassigned")
 end
 

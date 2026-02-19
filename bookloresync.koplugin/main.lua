@@ -1336,42 +1336,22 @@ Rounding is applied later during API sync based on config.
 @return string location (page number or position)
 --]]
 function BookloreSync:getCurrentProgress()
-    if not self.ui or not self.ui.document then
+    if not self.ui or not self.ui.document or not self.view or not self.view.state then
         return 0, "0"
     end
     
+    local current_page = self.view.state.page or 0
+    local total_pages = self.ui.document:getPageCount() or 1
     local progress = 0
-    local location = "0"
     
-    if self.ui.document.info and self.ui.document.info.has_pages then
-        -- PDF or image-based format (PDF, CBZ, CBR, DJVU)
-        -- For paged documents, use view.state.page for current page
-        local current_page = nil
-        if self.view and self.view.state and self.view.state.page then
-            current_page = self.view.state.page
-        elseif self.ui.paging then
-            current_page = self.ui.paging:getCurrentPage()
-        end
-        
-        local total_pages = self.ui.document:getPageCount()
-        
-        if current_page and total_pages and total_pages > 0 then
-            -- Store raw percentage with maximum precision
-            progress = (current_page / total_pages) * 100
-            location = tostring(current_page)
-        end
-    elseif self.ui.rolling then
-        -- EPUB or reflowable format
-        local cur_page = self.ui.rolling:getCurrentPage()
-        local total_pages = self.ui.document:getPageCount()
-        if cur_page and total_pages and total_pages > 0 then
-            -- Store raw percentage with maximum precision
-            progress = (cur_page / total_pages) * 100
-            location = tostring(cur_page)
-        end
+    if self.view.state.percent then
+        -- Use KOReader's native percent calculation (0.0 to 1.0)
+        progress = self.view.state.percent * 100
+    elseif total_pages > 0 then
+        progress = (current_page / total_pages) * 100
     end
     
-    return progress, location
+    return progress, tostring(current_page)
 end
 
 --[[--
@@ -1519,6 +1499,7 @@ user-visible error during deletion.
 --]]
 function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id)
     local ok, err = pcall(function()
+        local json = require("json")
         if self.booklore_username == "" or self.booklore_password == "" then
             self:logInfo("BookloreSync: notifyBookloreOnDeletion — Booklore credentials not set, skipping")
             return
@@ -1595,8 +1576,9 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id)
 
         -- Step 4: unassign book from shelf
         local payload = {
-            bookIds          = { book_id },
+            bookIds           = { book_id },
             shelvesToUnassign = { shelf_id },
+            shelvesToAssign   = json.empty_array,
         }
         local remove_ok, remove_code, remove_resp = self.api:request("POST", "/api/v1/books/shelves", payload, headers)
         if remove_ok then
@@ -1973,7 +1955,7 @@ function BookloreSync:connectNetwork()
     end
     
     -- Check if already connected
-    if Device.isOnline and Device:isOnline() then
+    if NetworkMgr:isConnected() then
         self:logInfo("BookloreSync: Network already connected")
         return true
     end
@@ -1981,7 +1963,7 @@ function BookloreSync:connectNetwork()
     self:logInfo("BookloreSync: Attempting to connect to network")
     
     -- Turn on WiFi if it's off
-    if not Device:isConnected() then
+    if not NetworkMgr:isConnected() then
         self:logInfo("BookloreSync: Enabling WiFi")
         Device:setWifiState(true)
     end
@@ -1992,7 +1974,7 @@ function BookloreSync:connectNetwork()
     local check_interval = 0.5
     
     while elapsed < timeout do
-        if Device.isOnline and Device:isOnline() then
+        if NetworkMgr:isConnected() then
             self:logInfo("BookloreSync: Network connected successfully after", elapsed, "seconds")
             return true
         end
@@ -2058,31 +2040,27 @@ function BookloreSync:onResume()
     if not self.manual_sync_only then
         self:logInfo("BookloreSync: Attempting background sync on resume")
         self:syncPendingSessions(true) -- silent sync
+        
+        -- Delay network-dependent tasks to allow Wi-Fi hardware to reconnect
+        UIManager:scheduleIn(10, function()
+            if NetworkMgr:isConnected() then
+                self:logInfo("BookloreSync: Network available, checking for unmatched books")
+                self:resolveUnmatchedBooks(true) -- silent mode
 
-        -- Try to resolve book IDs for cached books (if we have network now)
-        if NetworkMgr:isConnected() then
-            self:logInfo("BookloreSync: Network available, checking for unmatched books")
-            self:resolveUnmatchedBooks(true) -- silent mode
-
-            -- Auto-sync books from Booklore shelf if enabled
-            if self.auto_sync_shelf_on_resume then
-                self:logInfo("BookloreSync: Auto-sync from shelf enabled, scheduling sync")
-                -- Wait 2 seconds to ensure WiFi is fully initialized
-                UIManager:scheduleIn(2, function()
-                    if NetworkMgr:isConnected() then
-                        self:logInfo("BookloreSync: Starting auto-sync from Booklore shelf")
-                        local success, message = self:syncFromBookloreShelf()
-                        if success then
-                            self:logInfo("BookloreSync: Auto-sync completed:", message)
-                        else
-                            self:logWarn("BookloreSync: Auto-sync failed:", message)
-                        end
+                -- Auto-sync books from Booklore shelf if enabled
+                if self.auto_sync_shelf_on_resume then
+                    self:logInfo("BookloreSync: Starting auto-sync from Booklore shelf")
+                    local success, message = self:syncFromBookloreShelf()
+                    if success then
+                        self:logInfo("BookloreSync: Auto-sync completed:", message)
                     else
-                        self:logWarn("BookloreSync: Network not available for auto-sync")
+                        self:logWarn("BookloreSync: Auto-sync failed:", message)
                     end
-                end)
+                end
+            else
+                self:logInfo("BookloreSync: Network not available 10s after resume, skipping auto-sync")
             end
-        end
+        end)
     end
 
     -- If a book is currently open, start a new session
