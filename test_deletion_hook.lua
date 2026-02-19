@@ -136,7 +136,17 @@ local function make_plugin(overrides)
                 local search_ok, search_resp = self.api:searchBooksWithAuth(stem, self.booklore_username, self.booklore_password)
                 if search_ok and type(search_resp) == "table" and search_resp[1] and search_resp[1].id then
                     book_id = tonumber(search_resp[1].id)
-                    self:logInfo("found book by search, ID:", book_id)
+                    self:logInfo("found book by stem search, ID:", book_id)
+                else
+                    local title_part = stem:match("^.+ %- (.+)$")
+                    if title_part then
+                        self:logInfo("retrying search with title:", title_part)
+                        local title_ok, title_resp = self.api:searchBooksWithAuth(title_part, self.booklore_username, self.booklore_password)
+                        if title_ok and type(title_resp) == "table" and title_resp[1] and title_resp[1].id then
+                            book_id = tonumber(title_resp[1].id)
+                            self:logInfo("found book by title search, ID:", book_id)
+                        end
+                    end
                 end
             end
 
@@ -571,6 +581,56 @@ do
 end
 
 -- ═════════════════════════════════════════════════════════════════════════════
+-- ─── 15. Title-extraction fallback: "Author - Title" pattern ──────────
+
+section("notifyBookloreOnDeletion — title extracted from Author-Title stem")
+
+do
+    local search_calls = {}
+    local post_body = nil
+    local api_spy = {
+        getBookByHashWithAuth = function(...) return false, "not found" end,
+        searchBooksWithAuth = function(_, term, u, p)
+            table.insert(search_calls, term)
+            if term == "Waif" then return true, { { id = 77 } } end
+            return true, {}
+        end,
+        getOrRefreshBearerToken = function(...) return true, "tok" end,
+        request = function(_, method, path, body)
+            if method == "GET" then return true, 200, { { id = 3, name = "Kobo" } } end
+            if method == "POST" then post_body = body; return true, 200, {} end
+        end,
+    }
+    local plugin = make_plugin({ api = api_spy })
+    plugin:notifyBookloreOnDeletion("badhash", "Samantha Kolesnik - Waif")
+    ok(#search_calls >= 2,             "at least two search calls (stem + title)")
+    ok(search_calls[1] == "Samantha Kolesnik - Waif", "first search uses full stem")
+    ok(search_calls[2] == "Waif",      "second search uses title-only portion")
+    ok(post_body ~= nil,               "POST fired after title search succeeded")
+    ok(post_body.bookIds[1] == 77,     "correct book ID from title search in POST")
+end
+
+-- ─── 16. Title-extraction: no " - " separator, no extra call ────────
+
+section("notifyBookloreOnDeletion — no separator in stem, no extra search")
+
+do
+    local search_calls = {}
+    local api_spy = {
+        getBookByHashWithAuth = function(...) return false, "not found" end,
+        searchBooksWithAuth = function(_, term, u, p)
+            table.insert(search_calls, term)
+            return true, {}
+        end,
+        getOrRefreshBearerToken = function(...) return true, "tok" end,
+        request = function(...) return true, 200, { { id = 1, name = "Kobo" } } end,
+    }
+    local plugin = make_plugin({ api = api_spy })
+    plugin:notifyBookloreOnDeletion("badhash", "Waif")
+    ok(#search_calls == 1,             "only one search call when no separator in stem")
+    ok(search_calls[1] == "Waif",      "single search uses the bare stem")
+end
+
 -- SUMMARY
 -- ═════════════════════════════════════════════════════════════════════════════
 

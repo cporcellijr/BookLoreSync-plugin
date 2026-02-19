@@ -1262,12 +1262,23 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem)
             book_id = tonumber(hash_resp.id)
             self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by hash, ID:", book_id)
         else
-            -- Fallback: search by title stem
+            -- Fallback 1: search by full filename stem
             self:logInfo("BookloreSync: notifyBookloreOnDeletion — hash lookup failed, searching by stem:", stem)
             local search_ok, search_resp = self.api:searchBooksWithAuth(stem, self.booklore_username, self.booklore_password)
             if search_ok and type(search_resp) == "table" and search_resp[1] and search_resp[1].id then
                 book_id = tonumber(search_resp[1].id)
-                self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by search, ID:", book_id)
+                self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by stem search, ID:", book_id)
+            else
+                -- Fallback 2: extract title from "Author - Title" filename pattern and search again
+                local title_part = stem:match("^.+ %- (.+)$")
+                if title_part then
+                    self:logInfo("BookloreSync: notifyBookloreOnDeletion — retrying search with title:", title_part)
+                    local title_ok, title_resp = self.api:searchBooksWithAuth(title_part, self.booklore_username, self.booklore_password)
+                    if title_ok and type(title_resp) == "table" and title_resp[1] and title_resp[1].id then
+                        book_id = tonumber(title_resp[1].id)
+                        self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by title search, ID:", book_id)
+                    end
+                end
             end
         end
         
