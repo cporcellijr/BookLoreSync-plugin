@@ -755,7 +755,7 @@ function APIClient:getBookByHashWithAuth(book_hash, username, password)
         ["Authorization"] = "Bearer " .. token
     }
     
-    local success, code, response = self:request("GET", "/api/v1/books/by-hash/" .. book_hash, nil, headers)
+    local success, code, response = self:request("GET", "/api/koreader/books/by-hash/" .. book_hash, nil, headers)
     
     -- If we get 401/403, token might be invalid - retry with fresh token
     if not success and (code == 401 or code == 403) then
@@ -768,7 +768,7 @@ function APIClient:getBookByHashWithAuth(book_hash, username, password)
         local refresh_success, new_token = self:getOrRefreshBearerToken(username, password, true)
         if refresh_success then
             headers["Authorization"] = "Bearer " .. new_token
-            success, code, response = self:request("GET", "/api/v1/books/by-hash/" .. book_hash, nil, headers)
+            success, code, response = self:request("GET", "/api/koreader/books/by-hash/" .. book_hash, nil, headers)
         else
             return false, new_token or "Authentication failed after refresh"
         end
