@@ -843,4 +843,179 @@ function APIClient:_normalizeBookObject(book)
     return book
 end
 
+--[[--
+Normalize shelf book object from Booklore API
+
+Handles the specific structure returned by GET /api/v1/shelves/{shelfId}/books:
+- Extracts first author from metadata.authors array
+- Maps bookType to extension field for consistency
+- Extracts ISBNs from metadata object to top level
+
+@param book Raw book object from Booklore shelf API
+@return table Normalized book object
+--]]
+function APIClient:_normalizeShelfBookObject(book)
+    if not book or type(book) ~= "table" then
+        return book
+    end
+
+    -- Extract author from metadata.authors array (use first author)
+    if book.metadata and type(book.metadata) == "table" then
+        if book.metadata.authors and type(book.metadata.authors) == "table" and #book.metadata.authors > 0 then
+            book.author = book.metadata.authors[1]  -- Use first author
+        end
+
+        -- Extract ISBNs from metadata to top level for easier access
+        if not book.isbn10 then
+            book.isbn10 = book.metadata.isbn10
+        end
+        if not book.isbn13 then
+            book.isbn13 = book.metadata.isbn13
+        end
+    end
+
+    -- Map bookType to extension field for consistency with existing code
+    if book.bookType and not book.extension then
+        -- bookType values are like "PDF", "EPUB" - convert to lowercase for extension
+        book.extension = book.bookType:lower()
+    end
+
+    return book
+end
+
+--[[--
+Get all books in a specific shelf
+
+Uses the standard Booklore API endpoint: GET /api/v1/shelves/{shelfId}/books
+Returns a list of book objects with their metadata.
+
+Note: Book objects from this endpoint have:
+- metadata.authors (array of strings, not single string!)
+- bookType (not extension) - values: "PDF", "EPUB", etc.
+- metadata.isbn10, metadata.isbn13 (nested in metadata object)
+
+@param shelf_id Shelf ID (number)
+@param username Booklore username
+@param password Booklore password
+@return boolean success
+@return table|string books array or error message
+--]]
+function APIClient:getBooksInShelf(shelf_id, username, password)
+    self:logInfo("BookloreSync API: Getting books in shelf:", shelf_id)
+
+    -- Get or refresh cached Bearer token
+    local login_success, token = self:getOrRefreshBearerToken(username, password)
+
+    if not login_success then
+        self:logErr("BookloreSync API: Failed to get Bearer token:", token)
+        return false, "Authentication failed"
+    end
+
+    local headers = {
+        ["Authorization"] = "Bearer " .. token
+    }
+
+    -- Standard Booklore endpoint: GET /api/v1/shelves/{shelfId}/books
+    local success, code, response = self:request("GET", "/api/v1/shelves/" .. shelf_id .. "/books", nil, headers)
+
+    if success and type(response) == "table" then
+        self:logInfo("BookloreSync API: Found", #response, "books in shelf")
+
+        -- Normalize book objects (extract author from array, handle bookType field)
+        for i, book in ipairs(response) do
+            response[i] = self:_normalizeShelfBookObject(book)
+        end
+
+        return true, response
+    end
+
+    -- Request failed
+    local error_msg = response or "Could not retrieve books from shelf"
+    self:logWarn("BookloreSync API: Failed to get books in shelf:", error_msg)
+    return false, error_msg
+end
+
+--[[--
+Download book file from Booklore server
+
+@param book_id Booklore book ID (number)
+@param save_path Absolute path where to save the downloaded file
+@param username Booklore username
+@param password Booklore password
+@return boolean success
+@return string|nil error message if failed
+--]]
+function APIClient:downloadBook(book_id, save_path, username, password)
+    self:logInfo("BookloreSync API: Downloading book ID:", book_id, "to:", save_path)
+
+    -- Get or refresh cached Bearer token
+    local login_success, token = self:getOrRefreshBearerToken(username, password)
+
+    if not login_success then
+        self:logErr("BookloreSync API: Failed to get Bearer token:", token)
+        return false, "Authentication failed"
+    end
+
+    local headers = {
+        ["Authorization"] = "Bearer " .. token
+    }
+
+    local url = self.server_url .. "/api/v1/books/" .. book_id .. "/download"
+
+    -- Choose HTTP or HTTPS client
+    local http_client = http
+    if url:match("^https://") then
+        http_client = https
+    end
+
+    -- Open file for writing
+    local file, err = io.open(save_path, "wb")
+    if not file then
+        self:logErr("BookloreSync API: Failed to open file for writing:", err)
+        return false, "Failed to create file: " .. err
+    end
+
+    -- Download directly to file
+    local sink = ltn12.sink.file(file)
+
+    local req_args = {
+        url = url,
+        method = "GET",
+        headers = headers,
+        sink = sink,
+    }
+
+    http_client.TIMEOUT = self.timeout
+
+    local res, code, response_headers = http_client.request(req_args)
+
+    file:close()
+
+    if not code then
+        local error_msg = res or "Connection failed"
+        self:logErr("BookloreSync API: Download failed:", error_msg)
+        -- Clean up partial file
+        os.remove(save_path)
+        return false, "Network error: " .. error_msg
+    end
+
+    if type(code) ~= "number" then
+        local error_msg = tostring(code)
+        self:logErr("BookloreSync API: Non-numeric response code:", error_msg)
+        os.remove(save_path)
+        return false, "Connection error: " .. error_msg
+    end
+
+    -- Success codes (2xx)
+    if code >= 200 and code < 300 then
+        self:logInfo("BookloreSync API: Book downloaded successfully")
+        return true, nil
+    else
+        -- Download failed, clean up partial file
+        self:logErr("BookloreSync API: Download failed with HTTP", code)
+        os.remove(save_path)
+        return false, "HTTP " .. code .. ": Download failed"
+    end
+end
+
 return APIClient
