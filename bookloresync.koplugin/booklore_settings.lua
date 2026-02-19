@@ -136,9 +136,7 @@ function Settings:configurePassword(parent)
     input_dialog:onShowKeyboard()
 end
 
--- (configureShelfName removed per optimization request)
-    input_dialog:onShowKeyboard()
-end
+
 
 function Settings:configureMinDuration(parent)
     local input_dialog
