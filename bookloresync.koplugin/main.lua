@@ -405,6 +405,14 @@ function BookloreSync:registerDispatcherActions()
         title = _("Test Booklore Connection"),
         general = true,
     })
+
+    -- Register Sync from Booklore Shelf action
+    Dispatcher:registerAction("booklore_sync_shelf", {
+        category = "none",
+        event = "SyncBookloreShelf",
+        title = _("Sync from Booklore Shelf"),
+        general = true,
+    })
 end
 
 -- Event handlers for Dispatcher actions
@@ -435,6 +443,35 @@ end
 
 function BookloreSync:onToggleBookloreManualSyncOnly()
     self:toggleManualSyncOnly()
+    return true
+end
+
+function BookloreSync:onSyncBookloreShelf()
+    if not (self.booklore_username and self.booklore_username ~= "" and
+            self.booklore_password and self.booklore_password ~= "") then
+        UIManager:show(InfoMessage:new{
+            text = _("Booklore credentials not configured"),
+            timeout = 2,
+        })
+        return true
+    end
+    UIManager:show(InfoMessage:new{
+        text = _("Syncing from Booklore shelf..."),
+        timeout = 2,
+    })
+    UIManager:scheduleIn(0.1, function()
+        local success, message = self:syncFromBookloreShelf()
+        UIManager:show(InfoMessage:new{
+            text = message,
+            timeout = success and 5 or 10,
+        })
+        if success then
+            local FileManager = require("apps/filemanager/filemanager")
+            if FileManager.instance then
+                FileManager.instance:reinit("/mnt/onboard/Books")
+            end
+        end
+    end)
     return true
 end
 
