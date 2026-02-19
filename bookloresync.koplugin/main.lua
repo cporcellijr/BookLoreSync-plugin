@@ -1262,9 +1262,11 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem)
             book_id = tonumber(hash_resp.id)
             self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by hash, ID:", book_id)
         else
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — hash_ok:", tostring(hash_ok), "hash_resp:", tostring(type(hash_resp)), tostring(hash_resp))
             -- Fallback 1: search by full filename stem
             self:logInfo("BookloreSync: notifyBookloreOnDeletion — hash lookup failed, searching by stem:", stem)
             local search_ok, search_resp = self.api:searchBooksWithAuth(stem, self.booklore_username, self.booklore_password)
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — stem search ok:", tostring(search_ok), "resp type:", type(search_resp), "len:", tostring(type(search_resp) == "table" and #search_resp or "n/a"), "raw:", tostring(search_resp))
             if search_ok and type(search_resp) == "table" and search_resp[1] and search_resp[1].id then
                 book_id = tonumber(search_resp[1].id)
                 self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by stem search, ID:", book_id)
@@ -1274,6 +1276,7 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem)
                 if title_part then
                     self:logInfo("BookloreSync: notifyBookloreOnDeletion — retrying search with title:", title_part)
                     local title_ok, title_resp = self.api:searchBooksWithAuth(title_part, self.booklore_username, self.booklore_password)
+                    self:logInfo("BookloreSync: notifyBookloreOnDeletion — title search ok:", tostring(title_ok), "resp type:", type(title_resp), "len:", tostring(type(title_resp) == "table" and #title_resp or "n/a"), "raw:", tostring(title_resp))
                     if title_ok and type(title_resp) == "table" and title_resp[1] and title_resp[1].id then
                         book_id = tonumber(title_resp[1].id)
                         self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by title search, ID:", book_id)
