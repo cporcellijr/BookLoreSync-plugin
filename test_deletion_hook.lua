@@ -64,7 +64,7 @@ local function make_plugin(overrides)
     local self = {
         booklore_username  = "testuser",
         booklore_password  = "testpass",
-        booklore_shelf_name = "Kobo",
+        -- booklore_shelf_name removed per optimization
         secure_logs        = false,
         log_to_file        = false,
         -- capture log calls for assertion
@@ -164,35 +164,21 @@ local function make_plugin(overrides)
             end
 
             local headers = { ["Authorization"] = "Bearer " .. token }
-
-            local book_url = "/api/v1/books/" .. book_id .. "?withDescription=false"
-            local book_ok, _, book_resp = self.api:request("GET", book_url, nil, headers)
-            if not book_ok or type(book_resp) ~= "table" then
-                self:logWarn("failed to retrieve book details")
-                return
-            end
-
-            local shelf_id = nil
-            for _, shelf in ipairs(book_resp.shelves or {}) do
-                if shelf.name == self.booklore_shelf_name then
-                    shelf_id = tonumber(shelf.id)
-                    break
-                end
-            end
-
-            if not shelf_id then
-                self:logInfo("Book not on target shelf, skipping removal")
-                return
-            end
+            
+            -- Task 1 applied to Deletion: Hardcode shelf ID to 2 and Remove Extra API Call
+            local shelf_id = 2
 
             self:logInfo("removing book", book_id, "from shelf", shelf_id)
-
-            local payload = {
-                bookIds           = { book_id },
-                shelvesToUnassign = { shelf_id },
-                shelvesToAssign   = json.empty_array,
+            
+            local payload = string.format(
+                '{"bookIds":[%d],"shelvesToUnassign":[%d],"shelvesToAssign":[]}',
+                book_id, shelf_id
+            )
+            local remove_headers = { 
+                ["Authorization"] = "Bearer " .. token,
+                ["Content-Type"]  = "application/json"
             }
-            local remove_ok, remove_code, remove_resp = self.api:request("POST", "/api/v1/books/shelves", payload, headers)
+            local remove_ok, remove_code, remove_resp = self.api:request("POST", "/api/v1/books/shelves", payload, remove_headers)
             if remove_ok then
                 self:logInfo("book removed from shelf successfully")
             else
@@ -423,9 +409,20 @@ do
     plugin:notifyBookloreOnDeletion("deadbeef", "MyEpubBook")
 
     ok(post_body ~= nil,                         "POST /api/v1/books/shelves was called")
-    ok(post_body.bookIds[1] == 42,               "POST payload contains correct book ID")
-    ok(post_body.shelvesToUnassign[1] == 7,      "POST payload unassigns correct shelf ID")
-    ok(post_body.shelvesToAssign ~= nil,          "POST payload shelvesToAssign is a non-nil empty array")
+    
+    -- In our new implementation, post_body is a string
+    local post_data = nil
+    if type(post_body) == "string" then
+        post_data = {
+            bookIds = { tonumber(post_body:match('"bookIds":%[(%d+)%]')) },
+            shelvesToUnassign = { tonumber(post_body:match('"shelvesToUnassign":%[(%d+)%]')) },
+            shelvesToAssign = post_body:match('"shelvesToAssign":%[%]')
+        }
+    end
+
+    ok(post_data.bookIds[1] == 42,               "POST payload contains correct book ID")
+    ok(post_data.shelvesToUnassign[1] == 2,      "POST payload unassigns hardcoded shelf ID 2")
+    ok(post_data.shelvesToAssign ~= nil,          "POST payload shelvesToAssign is a non-nil empty array string")
 end
 
 -- ─── 8. notifyBookloreOnDeletion: fallback to title search ───────────────────
@@ -447,12 +444,7 @@ do
             return true, "my-token"
         end,
         request = function(_, method, path, body, headers)
-            if method == "GET" then
-                return true, 200, {
-                    id = 55,
-                    shelves = { { id = 9, name = "Kobo" } }
-                }
-            elseif method == "POST" then
+            if method == "POST" then
                 post_body = body
                 return true, 200, {}
             end
@@ -464,7 +456,14 @@ do
 
     ok(search_called_with == "FallbackTitle",  "title search called with the file stem")
     ok(post_body ~= nil,                       "POST still fired after fallback")
-    ok(post_body.bookIds[1] == 55,             "POST uses ID from search result")
+    
+    local post_data = nil
+    if type(post_body) == "string" then
+        post_data = {
+            bookIds = { tonumber(post_body:match('"bookIds":%[(%d+)%]')) }
+        }
+    end
+    ok(post_data.bookIds[1] == 55,             "POST uses ID from search result")
 end
 
 -- ─── 9. notifyBookloreOnDeletion: book not found anywhere ────────────────────
@@ -513,47 +512,7 @@ do
     ok(#plugin._warns > 0, "warning logged for token failure")
 end
 
--- ─── 11. notifyBookloreOnDeletion: shelf not found ───────────────────────────
-
-section("notifyBookloreOnDeletion — target shelf not found")
-
-do
-    local posted = false
-    local api_spy = {
-        getBookByHashWithAuth   = function(...) return true, { id = 1 } end,
-        getOrRefreshBearerToken = function(...) return true, "tok" end,
-        request = function(_, method, path, body, headers)
-            if method == "GET" then
-                -- Return book that is NOT on "Kobo" shelf
-                return true, 200, {
-                    id = 1,
-                    shelves = { { id = 5, name = "DifferentShelf" } }
-                }
-            elseif method == "POST" then
-                posted = true
-                return true, 200, {}
-            end
-        end
-    }
-
-    local plugin = make_plugin({ api = api_spy, booklore_shelf_name = "Kobo" })
-    plugin:notifyBookloreOnDeletion("abc", "SomeBook")
-    ok(not posted, "no POST fired when book is not on target shelf")
-    ok(#plugin._infos > 0, "info logged for book not on shelf")
-end
-
--- ─── 12. notifyBookloreOnDeletion: custom shelf name ─────────────────────────
-
-section("notifyBookloreOnDeletion — custom shelf name setting")
-
-do
-    local opts = { book_id = 10, shelf_id = 20, shelf_name = "MyCustomShelf", _last_post = nil }
-    local plugin = make_plugin({ api = api_happy_path(opts), booklore_shelf_name = "MyCustomShelf" })
-    plugin:notifyBookloreOnDeletion("hash1", "book1")
-    ok(opts._last_post ~= nil,                    "POST fired for custom shelf name")
-    ok(opts._last_post.shelvesToAssign ~= nil, "shelvesToAssign is a non-nil empty array")
-    ok(opts._last_post.shelvesToUnassign[1] == 20, "correct custom shelf ID unassigned")
-end
+-- (Test 11 and 12 removed as they relied on configurable shelf names which are now hardcoded to ID 2)
 
 -- ─── 13. notifyBookloreOnDeletion: pcall swallows API panics ─────────────────
 
@@ -631,7 +590,14 @@ do
     ok(search_calls[1] == "Samantha Kolesnik - Waif", "first search uses full stem")
     ok(search_calls[2] == "Waif",      "second search uses title-only portion")
     ok(post_body ~= nil,               "POST fired after title search succeeded")
-    ok(post_body.bookIds[1] == 77,     "correct book ID from title search in POST")
+    
+    local post_data = nil
+    if type(post_body) == "string" then
+        post_data = {
+            bookIds = { tonumber(post_body:match('"bookIds":%[(%d+)%]')) }
+        }
+    end
+    ok(post_data.bookIds[1] == 77,     "correct book ID from title search in POST")
 end
 
 -- ─── 16. Title-extraction: no " - " separator, no extra call ────────

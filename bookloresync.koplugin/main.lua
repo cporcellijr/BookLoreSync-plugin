@@ -157,7 +157,7 @@ function BookloreSync:init()
     -- Booklore login credentials for historical data matching
     self.booklore_username = self.settings:readSetting("booklore_username") or ""
     self.booklore_password = self.settings:readSetting("booklore_password") or ""
-    self.booklore_shelf_name = self.settings:readSetting("booklore_shelf_name") or "Kobo"
+    -- (self.booklore_shelf_name removed per optimization request)
 
     -- Auto-sync from shelf on resume
     self.auto_sync_shelf_on_resume = self.settings:readSetting("auto_sync_shelf_on_resume")
@@ -535,39 +535,10 @@ function BookloreSync:syncFromBookloreShelf()
         return false, "Booklore credentials not configured. Please configure your Booklore account first."
     end
 
-    if not self.booklore_shelf_name or self.booklore_shelf_name == "" then
-        return false, "Booklore shelf not configured. Please set a shelf name in settings."
-    end
+    self:logInfo("BookloreSync: syncFromBookloreShelf — starting sync from shelf ID: 2")
 
-    self:logInfo("BookloreSync: syncFromBookloreShelf — starting sync from shelf:", self.booklore_shelf_name)
-
-    -- Get Bearer token
-    local token_ok, token = self.api:getOrRefreshBearerToken(self.booklore_username, self.booklore_password)
-    if not token_ok then
-        return false, "Failed to authenticate with Booklore: " .. (token or "unknown error")
-    end
-
-    local headers = { ["Authorization"] = "Bearer " .. token }
-
-    -- Get list of shelves to find our shelf ID
-    local shelves_ok, _, shelves_resp = self.api:request("GET", "/api/v1/shelves", nil, headers)
-    if not shelves_ok or type(shelves_resp) ~= "table" then
-        return false, "Failed to retrieve shelves from Booklore"
-    end
-
-    local shelf_id = nil
-    for _, shelf in ipairs(shelves_resp) do
-        if shelf.name == self.booklore_shelf_name then
-            shelf_id = tonumber(shelf.id)
-            break
-        end
-    end
-
-    if not shelf_id then
-        return false, "Shelf '" .. self.booklore_shelf_name .. "' not found in Booklore"
-    end
-
-    self:logInfo("BookloreSync: syncFromBookloreShelf — found shelf ID:", shelf_id)
+    -- Task 1: Hardcode shelf ID to 2
+    local shelf_id = 2
 
     -- Get books in shelf
     local books_ok, books = self.api:getBooksInShelf(shelf_id, self.booklore_username, self.booklore_password)
@@ -601,57 +572,30 @@ function BookloreSync:syncFromBookloreShelf()
             self:logWarn("BookloreSync: syncFromBookloreShelf — skipping book with invalid ID:", book.id)
             errors = errors + 1
         else
-            -- Check if book already exists locally
-            local cached_book = self.db:getBookByBookId(book_id)
+            -- Task 3: Streamline the File Existence Check
+            -- Generate the expected filename and filepath immediately inside the loop
+            local filename = self:_generateFilename(book)
+            local filepath = download_dir .. "/" .. filename
 
-            if cached_book and cached_book.file_path then
-                -- Book already in cache and file exists
-                local file_exists = lfs.attributes(cached_book.file_path, "mode") == "file"
-                if file_exists then
-                    self:logInfo("BookloreSync: syncFromBookloreShelf — book already exists locally:", book.title, "at", cached_book.file_path)
-                    skipped = skipped + 1
-                else
-                    -- File was deleted but cache entry remains - download it
-                    self:logInfo("BookloreSync: syncFromBookloreShelf — cached file missing, re-downloading:", book.title)
-                    local filename = self:_generateFilename(book)
-                    local filepath = download_dir .. "/" .. filename
-
-                    local download_ok, download_err = self.api:downloadBook(book_id, filepath, self.booklore_username, self.booklore_password)
-                    if download_ok then
-                        self:logInfo("BookloreSync: syncFromBookloreShelf — downloaded:", book.title)
-                        -- Update cache with new file path (calculate hash after download)
-                        local hash = self:calculateBookHash(filepath)
-                        self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
-                        downloaded = downloaded + 1
-                    else
-                        self:logWarn("BookloreSync: syncFromBookloreShelf — download failed for:", book.title, download_err)
-                        errors = errors + 1
-                    end
-                end
+            -- Use lfs.attributes(filepath, "mode") == "file" to check if the file physically exists on the device
+            if lfs.attributes(filepath, "mode") == "file" then
+                self:logInfo("BookloreSync: syncFromBookloreShelf — book already exists locally:", filepath)
+                -- If it exists: skip the download, but ensure the database cache is updated
+                local hash = self:calculateBookHash(filepath)
+                self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
+                skipped = skipped + 1
             else
-                -- Book not in local cache - download it
-                self:logInfo("BookloreSync: syncFromBookloreShelf — downloading new book:", book.title)
-                local filename = self:_generateFilename(book)
-                local filepath = download_dir .. "/" .. filename
-
-                -- Check if file already exists at target path (manual import case)
-                if lfs.attributes(filepath, "mode") == "file" then
-                    self:logInfo("BookloreSync: syncFromBookloreShelf — file already exists, adding to cache:", filepath)
+                -- If it does not exist: call self.api:downloadBook, then calculate the hash and save it to the database cache
+                self:logInfo("BookloreSync: syncFromBookloreShelf — downloading book:", book.title)
+                local download_ok, download_err = self.api:downloadBook(book_id, filepath, self.booklore_username, self.booklore_password)
+                if download_ok then
+                    self:logInfo("BookloreSync: syncFromBookloreShelf — downloaded:", book.title)
                     local hash = self:calculateBookHash(filepath)
                     self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
-                    skipped = skipped + 1
+                    downloaded = downloaded + 1
                 else
-                    local download_ok, download_err = self.api:downloadBook(book_id, filepath, self.booklore_username, self.booklore_password)
-                    if download_ok then
-                        self:logInfo("BookloreSync: syncFromBookloreShelf — downloaded:", book.title)
-                        -- Add to cache (calculate hash after download)
-                        local hash = self:calculateBookHash(filepath)
-                        self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
-                        downloaded = downloaded + 1
-                    else
-                        self:logWarn("BookloreSync: syncFromBookloreShelf — download failed for:", book.title, download_err)
-                        errors = errors + 1
-                    end
+                    self:logWarn("BookloreSync: syncFromBookloreShelf — download failed for:", book.title, download_err)
+                    errors = errors + 1
                 end
             end
         end
@@ -675,27 +619,8 @@ Creates a filename in the format "Author - Title.extension" or falls back to
 @return string Sanitized filename
 --]]
 function BookloreSync:_generateFilename(book)
-    local filename = nil
     local extension = book.extension or "epub"
-
-    if book.author and book.title then
-        -- Format: "Author - Title.extension"
-        filename = book.author .. " - " .. book.title .. "." .. extension
-    elseif book.title then
-        -- Format: "Title.extension"
-        filename = book.title .. "." .. extension
-    else
-        -- Fallback: "BookID_{id}.extension"
-        filename = "BookID_" .. book.id .. "." .. extension
-    end
-
-    -- Sanitize filename (remove invalid characters for filesystem)
-    filename = filename:gsub('[<>:"/\\|?*]', '_')  -- Replace invalid chars with underscore
-    filename = filename:gsub('%s+', ' ')            -- Collapse multiple spaces
-    filename = filename:gsub('^%s+', '')            -- Trim leading spaces
-    filename = filename:gsub('%s+$', '')            -- Trim trailing spaces
-
-    return filename
+    return "BookID_" .. book.id .. "." .. extension
 end
 
 function BookloreSync:addToMainMenu(menu_items)
@@ -728,8 +653,7 @@ function BookloreSync:addToMainMenu(menu_items)
                 help_text = _("Download books from your configured Booklore shelf to this device. Books already present locally will be skipped."),
                 enabled_func = function()
                     return self.booklore_username and self.booklore_username ~= "" and
-                           self.booklore_password and self.booklore_password ~= "" and
-                           self.booklore_shelf_name and self.booklore_shelf_name ~= ""
+                           self.booklore_password and self.booklore_password ~= ""
                 end,
                 callback = function()
                     UIManager:show(InfoMessage:new{
@@ -764,8 +688,7 @@ function BookloreSync:addToMainMenu(menu_items)
                 end,
                 enabled_func = function()
                     return self.booklore_username and self.booklore_username ~= "" and
-                           self.booklore_password and self.booklore_password ~= "" and
-                           self.booklore_shelf_name and self.booklore_shelf_name ~= ""
+                           self.booklore_password and self.booklore_password ~= ""
                 end,
                 callback = function()
                     self.auto_sync_shelf_on_resume = not self.auto_sync_shelf_on_resume
@@ -1551,36 +1474,23 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id)
         
         local headers = { ["Authorization"] = "Bearer " .. token }
         
-        -- Step 3: list shelves and find the target shelf for this specific book
-        local book_url = "/api/v1/books/" .. book_id .. "?withDescription=false"
-        local book_ok, _, book_resp = self.api:request("GET", book_url, nil, headers)
-        if not book_ok or type(book_resp) ~= "table" then
-            self:logWarn("BookloreSync: notifyBookloreOnDeletion — failed to retrieve book details")
-            return
-        end
-        
-        local shelf_id = nil
-        for _, shelf in ipairs(book_resp.shelves or {}) do
-            if shelf.name == self.booklore_shelf_name then
-                shelf_id = tonumber(shelf.id)
-                break
-            end
-        end
-        
-        if not shelf_id then
-            self:logInfo("BookloreSync: notifyBookloreOnDeletion — Book not on target shelf, skipping removal")
-            return
-        end
+        -- Task 1 applied to Deletion: Hardcode shelf ID to 2 and Remove Extra API Call
+        local shelf_id = 2
         
         self:logInfo("BookloreSync: notifyBookloreOnDeletion — removing book", book_id, "from shelf", shelf_id)
 
         -- Step 4: unassign book from shelf
-        local payload = {
-            bookIds           = { book_id },
-            shelvesToUnassign = { shelf_id },
-            shelvesToAssign   = json.empty_array,
+        -- Constructs a raw JSON string to ensure shelvesToAssign is explicitly []
+        -- and not nil or a Lua table that might be encoded as {}
+        local payload = string.format(
+            '{"bookIds":[%d],"shelvesToUnassign":[%d],"shelvesToAssign":[]}',
+            book_id, shelf_id
+        )
+        local remove_headers = { 
+            ["Authorization"] = "Bearer " .. token,
+            ["Content-Type"]  = "application/json"
         }
-        local remove_ok, remove_code, remove_resp = self.api:request("POST", "/api/v1/books/shelves", payload, headers)
+        local remove_ok, remove_code, remove_resp = self.api:request("POST", "/api/v1/books/shelves", payload, remove_headers)
         if remove_ok then
             self:logInfo("BookloreSync: notifyBookloreOnDeletion — book removed from shelf successfully")
         else
@@ -1965,7 +1875,7 @@ function BookloreSync:connectNetwork()
     -- Turn on WiFi if it's off
     if not NetworkMgr:isConnected() then
         self:logInfo("BookloreSync: Enabling WiFi")
-        Device:setWifiState(true)
+        NetworkMgr:turnOnWifi()
     end
     
     -- Wait up to 15 seconds for connection

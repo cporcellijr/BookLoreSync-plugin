@@ -136,38 +136,7 @@ function Settings:configurePassword(parent)
     input_dialog:onShowKeyboard()
 end
 
-function Settings:configureShelfName(parent)
-    local input_dialog
-    input_dialog = InputDialog:new{
-        title = _("Booklore Shelf Name for Deletion"),
-        input = parent.booklore_shelf_name,
-        input_hint = "Kobo",
-        buttons = {
-            {
-                {
-                    text = _("Cancel"),
-                    callback = function()
-                        UIManager:close(input_dialog)
-                    end,
-                },
-                {
-                    text = _("Save"),
-                    is_enter_default = true,
-                    callback = function()
-                        parent.booklore_shelf_name = input_dialog:getInputText()
-                        parent.settings:saveSetting("booklore_shelf_name", parent.booklore_shelf_name)
-                        parent.settings:flush()
-                        UIManager:close(input_dialog)
-                        UIManager:show(InfoMessage:new{
-                            text = _("Shelf name saved"),
-                            timeout = 1,
-                        })
-                    end,
-                },
-            },
-        },
-    }
-    UIManager:show(input_dialog)
+-- (configureShelfName removed per optimization request)
     input_dialog:onShowKeyboard()
 end
 
@@ -350,14 +319,7 @@ function Settings:buildConnectionMenu(parent)
                     self:configurePassword(parent)
                 end,
             },
-            {
-                text = _("Shelf Name for Deletion"),
-                help_text = _("The Booklore shelf that books will be removed from when deleted locally. Default is 'Kobo'. IMPORTANT: requires your Booklore login  set it first via Import Reading History → Configure Booklore Account."),
-                keep_menu_open = true,
-                callback = function()
-                    self:configureShelfName(parent)
-                end,
-            },
+            -- (Shelf Name menu entry removed)
             {
                 text = _("Test Connection"),
                 help_text = _("Test the connection to your Booklore server to verify your credentials and network connectivity."),

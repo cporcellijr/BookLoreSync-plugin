@@ -335,8 +335,25 @@ Get book by hash
 function APIClient:getBookByHash(book_hash)
     self:logInfo("BookloreSync API: Looking up book by hash:", book_hash)
     
-    local success, code, response = self:request("GET", "/api/v1/books/by-hash/" .. book_hash)
+    local login_success, token = self:getOrRefreshBearerToken(self.username, self.password)
+    local headers = nil
+    if login_success then
+        headers = { ["Authorization"] = "Bearer " .. token }
+    end
+
+    local success, code, response = self:request("GET", "/api/v1/books/by-hash/" .. book_hash, nil, headers)
     
+    -- Retry with fresh token if 401/403
+    if not success and (code == 401 or code == 403) and self.username and self.password then
+        self:logWarn("BookloreSync API: Token rejected, refreshing and retrying lookup")
+        if self.db then self.db:deleteBearerToken(self.username) end
+        local refresh_success, new_token = self:getOrRefreshBearerToken(self.username, self.password, true)
+        if refresh_success then
+            headers = { ["Authorization"] = "Bearer " .. new_token }
+            success, code, response = self:request("GET", "/api/v1/books/by-hash/" .. book_hash, nil, headers)
+        end
+    end
+
     if success and type(response) == "table" then
         self:logInfo("BookloreSync API: Found book, ID:", response.id)
         
@@ -376,8 +393,25 @@ Submit reading session
 function APIClient:submitSession(session_data)
     self:logInfo("BookloreSync API: Submitting reading session for book:", session_data.bookId or session_data.bookHash)
     
-    local success, code, response = self:request("POST", "/api/v1/reading-sessions", session_data)
+    local login_success, token = self:getOrRefreshBearerToken(self.username, self.password)
+    local headers = nil
+    if login_success then
+        headers = { ["Authorization"] = "Bearer " .. token }
+    end
+
+    local success, code, response = self:request("POST", "/api/v1/reading-sessions", session_data, headers)
     
+    -- Retry with fresh token if 401/403
+    if not success and (code == 401 or code == 403) and self.username and self.password then
+        self:logWarn("BookloreSync API: Token rejected, refreshing and retrying submission")
+        if self.db then self.db:deleteBearerToken(self.username) end
+        local refresh_success, new_token = self:getOrRefreshBearerToken(self.username, self.password, true)
+        if refresh_success then
+            headers = { ["Authorization"] = "Bearer " .. new_token }
+            success, code, response = self:request("POST", "/api/v1/reading-sessions", session_data, headers)
+        end
+    end
+
     if success then
         self:logInfo("BookloreSync API: Session submitted successfully")
         return true, "Session synced successfully", code
@@ -988,8 +1022,6 @@ function APIClient:downloadBook(book_id, save_path, username, password)
     http_client.TIMEOUT = self.timeout
 
     local res, code, response_headers = http_client.request(req_args)
-
-    file:close()
 
     if not code then
         local error_msg = res or "Connection failed"
