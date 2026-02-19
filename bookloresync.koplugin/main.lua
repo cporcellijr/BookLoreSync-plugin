@@ -343,10 +343,12 @@ function BookloreSync:init()
 
             local result = orig_deleteSelectedFiles(fm_self)
 
+            local delay = 0.5
             for _, item in ipairs(to_sync) do
-                UIManager:scheduleIn(0.5, function()
+                UIManager:scheduleIn(delay, function()
                     booklore_self:notifyBookloreOnDeletion(item.hash, item.stem, item.book_id)
                 end)
+                delay = delay + 0.5
             end
             return result
         end
@@ -1568,15 +1570,16 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id)
         
         local headers = { ["Authorization"] = "Bearer " .. token }
         
-        -- Step 3: list shelves and find the target shelf
-        local shelves_ok, _, shelves_resp = self.api:request("GET", "/api/v1/shelves", nil, headers)
-        if not shelves_ok or type(shelves_resp) ~= "table" then
-            self:logWarn("BookloreSync: notifyBookloreOnDeletion — failed to retrieve shelves")
+        -- Step 3: list shelves and find the target shelf for this specific book
+        local book_url = "/api/v1/books/" .. book_id .. "?withDescription=false"
+        local book_ok, _, book_resp = self.api:request("GET", book_url, nil, headers)
+        if not book_ok or type(book_resp) ~= "table" then
+            self:logWarn("BookloreSync: notifyBookloreOnDeletion — failed to retrieve book details")
             return
         end
         
         local shelf_id = nil
-        for _, shelf in ipairs(shelves_resp) do
+        for _, shelf in ipairs(book_resp.shelves or {}) do
             if shelf.name == self.booklore_shelf_name then
                 shelf_id = tonumber(shelf.id)
                 break
@@ -1584,7 +1587,7 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id)
         end
         
         if not shelf_id then
-            self:logWarn("BookloreSync: notifyBookloreOnDeletion — shelf not found:", self.booklore_shelf_name)
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — Book not on target shelf, skipping removal")
             return
         end
         

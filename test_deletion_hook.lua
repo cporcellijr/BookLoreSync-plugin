@@ -163,14 +163,15 @@ local function make_plugin(overrides)
 
             local headers = { ["Authorization"] = "Bearer " .. token }
 
-            local shelves_ok, _, shelves_resp = self.api:request("GET", "/api/v1/shelves", nil, headers)
-            if not shelves_ok or type(shelves_resp) ~= "table" then
-                self:logWarn("failed to retrieve shelves")
+            local book_url = "/api/v1/books/" .. book_id .. "?withDescription=false"
+            local book_ok, _, book_resp = self.api:request("GET", book_url, nil, headers)
+            if not book_ok or type(book_resp) ~= "table" then
+                self:logWarn("failed to retrieve book details")
                 return
             end
 
             local shelf_id = nil
-            for _, shelf in ipairs(shelves_resp) do
+            for _, shelf in ipairs(book_resp.shelves or {}) do
                 if shelf.name == self.booklore_shelf_name then
                     shelf_id = tonumber(shelf.id)
                     break
@@ -178,7 +179,7 @@ local function make_plugin(overrides)
             end
 
             if not shelf_id then
-                self:logWarn("shelf not found:", self.booklore_shelf_name)
+                self:logInfo("Book not on target shelf, skipping removal")
                 return
             end
 
@@ -242,10 +243,13 @@ local function api_happy_path(opts)
             return true, "fake-bearer-token"
         end,
         request = function(_, method, path, body, headers)
-            if method == "GET" and (path == "/api/v1/shelves" or path:find("/api/v1/books")) then
+            if method == "GET" and path:find("/api/v1/books/") then
                 return true, 200, {
-                    { id = opts.shelf_id or 7, name = opts.shelf_name or "Kobo" },
-                    { id = 99, name = "OtherShelf" },
+                    id = opts.book_id or 42,
+                    shelves = {
+                        { id = opts.shelf_id or 7, name = opts.shelf_name or "Kobo" },
+                        { id = 99, name = "OtherShelf" },
+                    }
                 }
             elseif method == "POST" and path == "/api/v1/books/shelves" then
                 -- Record the call for assertion
@@ -401,7 +405,10 @@ do
         end,
         request = function(_, method, path, body, headers)
             if method == "GET" then
-                return true, 200, { { id = 7, name = "Kobo" } }
+                return true, 200, {
+                    id = 42,
+                    shelves = { { id = 7, name = "Kobo" } }
+                }
             elseif method == "POST" then
                 post_body = body
                 return true, 200, {}
@@ -438,7 +445,10 @@ do
         end,
         request = function(_, method, path, body, headers)
             if method == "GET" then
-                return true, 200, { { id = 9, name = "Kobo" } }
+                return true, 200, {
+                    id = 55,
+                    shelves = { { id = 9, name = "Kobo" } }
+                }
             elseif method == "POST" then
                 post_body = body
                 return true, 200, {}
@@ -466,7 +476,10 @@ do
         getOrRefreshBearerToken = function(...) return true, "tok" end,
         request = function(_, method, ...)
             if method == "POST" then posted = true end
-            return true, 200, { { id = 1, name = "Kobo" } }
+            return true, 200, {
+                id = 1,
+                shelves = { { id = 1, name = "Kobo" } }
+            }
         end
     }
 
@@ -508,8 +521,11 @@ do
         getOrRefreshBearerToken = function(...) return true, "tok" end,
         request = function(_, method, path, body, headers)
             if method == "GET" then
-                -- Return shelves that do NOT include "Kobo"
-                return true, 200, { { id = 5, name = "DifferentShelf" } }
+                -- Return book that is NOT on "Kobo" shelf
+                return true, 200, {
+                    id = 1,
+                    shelves = { { id = 5, name = "DifferentShelf" } }
+                }
             elseif method == "POST" then
                 posted = true
                 return true, 200, {}
@@ -519,8 +535,8 @@ do
 
     local plugin = make_plugin({ api = api_spy, booklore_shelf_name = "Kobo" })
     plugin:notifyBookloreOnDeletion("abc", "SomeBook")
-    ok(not posted, "no POST fired when shelf name does not match any shelf")
-    ok(#plugin._warns > 0, "warning logged for missing shelf")
+    ok(not posted, "no POST fired when book is not on target shelf")
+    ok(#plugin._infos > 0, "info logged for book not on shelf")
 end
 
 -- ─── 12. notifyBookloreOnDeletion: custom shelf name ─────────────────────────
@@ -597,7 +613,12 @@ do
         end,
         getOrRefreshBearerToken = function(...) return true, "tok" end,
         request = function(_, method, path, body)
-            if method == "GET" then return true, 200, { { id = 3, name = "Kobo" } } end
+            if method == "GET" then
+                return true, 200, {
+                    id = 3,
+                    shelves = { { id = 3, name = "Kobo" } }
+                }
+            end
             if method == "POST" then post_body = body; return true, 200, {} end
         end,
     }
@@ -623,7 +644,7 @@ do
             return true, {}
         end,
         getOrRefreshBearerToken = function(...) return true, "tok" end,
-        request = function(...) return true, 200, { { id = 1, name = "Kobo" } } end,
+        request = function(...) return true, 200, { id = 1, shelves = { { id = 1, name = "Kobo" } } } end,
     }
     local plugin = make_plugin({ api = api_spy })
     plugin:notifyBookloreOnDeletion("badhash", "Waif")
