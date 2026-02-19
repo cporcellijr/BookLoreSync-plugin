@@ -1591,14 +1591,8 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id)
         self:logInfo("BookloreSync: notifyBookloreOnDeletion — removing book", book_id, "from shelf", shelf_id)
 
         -- Step 4: unassign book from shelf
-        -- Note: Empty arrays must be properly encoded as [] not {}
-        -- Use setmetatable to mark empty tables as arrays for JSON encoding
-        local empty_array = {}
-        setmetatable(empty_array, { __jsontype = "array" })
-
         local payload = {
             bookIds          = { book_id },
-            shelvesToAssign  = empty_array,
             shelvesToUnassign = { shelf_id },
         }
         local remove_ok, remove_code, remove_resp = self.api:request("POST", "/api/v1/books/shelves", payload, headers)

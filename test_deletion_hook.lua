@@ -186,7 +186,6 @@ local function make_plugin(overrides)
 
             local payload = {
                 bookIds           = { book_id },
-                shelvesToAssign   = {},
                 shelvesToUnassign = { shelf_id },
             }
             local remove_ok, remove_code, remove_resp = self.api:request("POST", "/api/v1/books/shelves", payload, headers)
@@ -243,7 +242,7 @@ local function api_happy_path(opts)
             return true, "fake-bearer-token"
         end,
         request = function(_, method, path, body, headers)
-            if method == "GET" and path == "/api/v1/shelves" then
+            if method == "GET" and (path == "/api/v1/shelves" or path:find("/api/v1/books")) then
                 return true, 200, {
                     { id = opts.shelf_id or 7, name = opts.shelf_name or "Kobo" },
                     { id = 99, name = "OtherShelf" },
@@ -416,7 +415,7 @@ do
     ok(post_body ~= nil,                         "POST /api/v1/books/shelves was called")
     ok(post_body.bookIds[1] == 42,               "POST payload contains correct book ID")
     ok(post_body.shelvesToUnassign[1] == 7,      "POST payload unassigns correct shelf ID")
-    ok(#post_body.shelvesToAssign == 0,          "POST payload shelvesToAssign is empty")
+    ok(post_body.shelvesToAssign == nil,          "POST payload shelvesToAssign is omitted")
 end
 
 -- ─── 8. notifyBookloreOnDeletion: fallback to title search ───────────────────
@@ -533,6 +532,7 @@ do
     local plugin = make_plugin({ api = api_happy_path(opts), booklore_shelf_name = "MyCustomShelf" })
     plugin:notifyBookloreOnDeletion("hash1", "book1")
     ok(opts._last_post ~= nil,                    "POST fired for custom shelf name")
+    ok(opts._last_post.shelvesToAssign == nil, "shelvesToAssign is omitted")
     ok(opts._last_post.shelvesToUnassign[1] == 20, "correct custom shelf ID unassigned")
 end
 
