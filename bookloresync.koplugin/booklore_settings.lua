@@ -136,6 +136,41 @@ function Settings:configurePassword(parent)
     input_dialog:onShowKeyboard()
 end
 
+function Settings:configureShelfName(parent)
+    local input_dialog
+    input_dialog = InputDialog:new{
+        title = _("Booklore Shelf Name for Deletion"),
+        input = parent.booklore_shelf_name,
+        input_hint = "Kobo",
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    callback = function()
+                        UIManager:close(input_dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    is_enter_default = true,
+                    callback = function()
+                        parent.booklore_shelf_name = input_dialog:getInputText()
+                        parent.settings:saveSetting("booklore_shelf_name", parent.booklore_shelf_name)
+                        parent.settings:flush()
+                        UIManager:close(input_dialog)
+                        UIManager:show(InfoMessage:new{
+                            text = _("Shelf name saved"),
+                            timeout = 1,
+                        })
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(input_dialog)
+    input_dialog:onShowKeyboard()
+end
+
 function Settings:configureMinDuration(parent)
     local input_dialog
     input_dialog = InputDialog:new{
@@ -313,6 +348,14 @@ function Settings:buildConnectionMenu(parent)
                 keep_menu_open = true,
                 callback = function()
                     self:configurePassword(parent)
+                end,
+            },
+            {
+                text = _("Shelf Name for Deletion"),
+                help_text = _("The Booklore shelf that books will be removed from when deleted locally. Default is 'Kobo'. Requires Booklore Account credentials (configured in Import Reading History)."),
+                keep_menu_open = true,
+                callback = function()
+                    self:configureShelfName(parent)
                 end,
             },
             {

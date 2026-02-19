@@ -32,6 +32,9 @@ local BookloreSync = WidgetContainer:extend{
     is_doc_only = false,
 }
 
+-- Guard flag: ensure FileManager deletion hooks are only applied once per session
+local booklore_fm_patched = false
+
 --[[--
 Redact URLs from log message for secure logging
 
@@ -154,6 +157,7 @@ function BookloreSync:init()
     -- Booklore login credentials for historical data matching
     self.booklore_username = self.settings:readSetting("booklore_username") or ""
     self.booklore_password = self.settings:readSetting("booklore_password") or ""
+    self.booklore_shelf_name = self.settings:readSetting("booklore_shelf_name") or "Kobo"
     
     -- Current reading session tracking
     self.current_session = nil
@@ -294,6 +298,53 @@ function BookloreSync:init()
     
     -- Register actions with Dispatcher for gesture manager integration
     self:registerDispatcherActions()
+    
+    -- Patch FileManager deletion methods to trigger shelf removal (applied once per session)
+    local booklore_self = self
+    local ok, FileManager = pcall(require, "apps/filemanager/filemanager")
+    if ok and FileManager and not booklore_fm_patched then
+        booklore_fm_patched = true
+        
+        -- Path 1: Single-file deletion
+        local orig_deleteFile = FileManager.deleteFile
+        FileManager.deleteFile = function(fm_self, file, is_file)
+            local hash, stem = nil, nil
+            if is_file then
+                hash, stem = booklore_self:preDeleteHook(file)
+            end
+            
+            local result = orig_deleteFile(fm_self, file, is_file)
+            
+            if hash and stem then
+                UIManager:scheduleIn(0.5, function()
+                    booklore_self:notifyBookloreOnDeletion(hash, stem)
+                end)
+            end
+            return result
+        end
+        
+        -- Path 2: Bulk-select deletion
+        local orig_deleteSelectedFiles = FileManager.deleteSelectedFiles
+        FileManager.deleteSelectedFiles = function(fm_self)
+            local to_sync = {}
+            for _, file in ipairs(fm_self.selected_files or {}) do
+                local resolved = require("ffi/util").realpath(file)
+                local hash, stem = booklore_self:preDeleteHook(resolved)
+                if hash then
+                    table.insert(to_sync, { hash = hash, stem = stem })
+                end
+            end
+            
+            local result = orig_deleteSelectedFiles(fm_self)
+            
+            for _, item in ipairs(to_sync) do
+                UIManager:scheduleIn(0.5, function()
+                    booklore_self:notifyBookloreOnDeletion(item.hash, item.stem)
+                end)
+            end
+            return result
+        end
+    end
 end
 
 function BookloreSync:onExit()
@@ -1152,6 +1203,127 @@ function BookloreSync:calculateBookHash(file_path)
     
     self:logInfo("BookloreSync: Hash calculated:", hash)
     return hash
+end
+
+--[[--
+Capture hash and stem for a file about to be deleted (synchronous, no network).
+
+Must be called before the file is removed from disk. Returns nil, nil for
+non-EPUB files so that the follow-up network call is skipped.
+
+@param filepath Absolute path to the file being deleted
+@return string|nil MD5 hash of the file, or nil
+@return string|nil Filename stem (no extension), or nil
+--]]
+function BookloreSync:preDeleteHook(filepath)
+    if not filepath then
+        return nil, nil
+    end
+    
+    -- Only process EPUB files
+    local stem = filepath:match("([^/\\]+)%.[Ee][Pp][Uu][Bb]$")
+    if not stem then
+        return nil, nil
+    end
+    
+    self:logInfo("BookloreSync: preDeleteHook for:", filepath)
+    local hash = self:calculateBookHash(filepath)
+    if not hash then
+        self:logWarn("BookloreSync: preDeleteHook — could not compute hash for:", filepath)
+        return nil, nil
+    end
+    
+    return hash, stem
+end
+
+--[[--
+Remove a book from the configured Booklore shelf after local deletion (asynchronous).
+
+Looks up the book by hash, falls back to title search, then calls the shelf
+management API to unassign the book. All failures are logged and swallowed
+so that a network issue never surfaces as a user-visible error during deletion.
+
+@param hash MD5 hash of the deleted file
+@param stem Filename stem (no extension) used as title fallback
+--]]
+function BookloreSync:notifyBookloreOnDeletion(hash, stem)
+    local ok, err = pcall(function()
+        if self.booklore_username == "" or self.booklore_password == "" then
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — Booklore credentials not set, skipping")
+            return
+        end
+        
+        self:logInfo("BookloreSync: notifyBookloreOnDeletion — hash:", hash, "stem:", stem)
+        
+        -- Step 1: look up book ID by hash
+        local book_id = nil
+        local hash_ok, hash_resp = self.api:getBookByHashWithAuth(hash, self.booklore_username, self.booklore_password)
+        if hash_ok and hash_resp and hash_resp.id then
+            book_id = tonumber(hash_resp.id)
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by hash, ID:", book_id)
+        else
+            -- Fallback: search by title stem
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — hash lookup failed, searching by stem:", stem)
+            local search_ok, search_resp = self.api:searchBooksWithAuth(stem, self.booklore_username, self.booklore_password)
+            if search_ok and type(search_resp) == "table" and search_resp[1] and search_resp[1].id then
+                book_id = tonumber(search_resp[1].id)
+                self:logInfo("BookloreSync: notifyBookloreOnDeletion — found book by search, ID:", book_id)
+            end
+        end
+        
+        if not book_id then
+            self:logWarn("BookloreSync: notifyBookloreOnDeletion — book not found on server, skipping shelf removal")
+            return
+        end
+        
+        -- Step 2: get Bearer token
+        local token_ok, token = self.api:getOrRefreshBearerToken(self.booklore_username, self.booklore_password)
+        if not token_ok then
+            self:logWarn("BookloreSync: notifyBookloreOnDeletion — failed to get Bearer token:", token)
+            return
+        end
+        
+        local headers = { ["Authorization"] = "Bearer " .. token }
+        
+        -- Step 3: list shelves and find the target shelf
+        local shelves_ok, _, shelves_resp = self.api:request("GET", "/api/v1/shelves", nil, headers)
+        if not shelves_ok or type(shelves_resp) ~= "table" then
+            self:logWarn("BookloreSync: notifyBookloreOnDeletion — failed to retrieve shelves")
+            return
+        end
+        
+        local shelf_id = nil
+        for _, shelf in ipairs(shelves_resp) do
+            if shelf.name == self.booklore_shelf_name then
+                shelf_id = tonumber(shelf.id)
+                break
+            end
+        end
+        
+        if not shelf_id then
+            self:logWarn("BookloreSync: notifyBookloreOnDeletion — shelf not found:", self.booklore_shelf_name)
+            return
+        end
+        
+        self:logInfo("BookloreSync: notifyBookloreOnDeletion — removing book", book_id, "from shelf", shelf_id)
+        
+        -- Step 4: unassign book from shelf
+        local payload = {
+            bookIds          = { book_id },
+            shelvesToAssign  = {},
+            shelvesToUnassign = { shelf_id },
+        }
+        local remove_ok, remove_code, remove_resp = self.api:request("POST", "/api/v1/books/shelves", payload, headers)
+        if remove_ok then
+            self:logInfo("BookloreSync: notifyBookloreOnDeletion — book removed from shelf successfully")
+        else
+            self:logWarn("BookloreSync: notifyBookloreOnDeletion — shelf removal failed:", tostring(remove_code), tostring(remove_resp))
+        end
+    end)
+    
+    if not ok then
+        self:logWarn("BookloreSync: notifyBookloreOnDeletion — unexpected error:", tostring(err))
+    end
 end
 
 --[[--
