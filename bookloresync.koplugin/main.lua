@@ -165,6 +165,12 @@ function BookloreSync:init()
         self.auto_sync_shelf_on_resume = false  -- Default disabled
     end
 
+    -- Delete local books when removed from shelf (bidirectional sync)
+    self.delete_removed_shelf_books = self.settings:readSetting("delete_removed_shelf_books")
+    if self.delete_removed_shelf_books == nil then
+        self.delete_removed_shelf_books = false  -- Default disabled for safety
+    end
+
     -- Current reading session tracking
     self.current_session = nil
     
@@ -565,6 +571,15 @@ function BookloreSync:syncFromBookloreShelf()
     local skipped = 0
     local errors = 0
 
+    -- Build set of book IDs in shelf for deletion check
+    local shelf_book_ids = {}
+    for _, book in ipairs(books) do
+        local book_id = tonumber(book.id)
+        if book_id then
+            shelf_book_ids[book_id] = true
+        end
+    end
+
     for _, book in ipairs(books) do
         local book_id = tonumber(book.id)
 
@@ -601,9 +616,56 @@ function BookloreSync:syncFromBookloreShelf()
         end
     end
 
+    -- Bidirectional sync: Remove local BookID_*.epub files not in shelf
+    local deleted = 0
+    if self.delete_removed_shelf_books then
+        self:logInfo("BookloreSync: Bidirectional sync enabled - checking for local books removed from shelf")
+
+        -- Count shelf book IDs (table keys, not array length)
+        local shelf_count = 0
+        for _ in pairs(shelf_book_ids) do
+            shelf_count = shelf_count + 1
+        end
+        self:logInfo("BookloreSync: Shelf contains", shelf_count, "books")
+
+        -- Scan for BookID_*.epub files in download directory
+        local local_book_count = 0
+        for file in lfs.dir(download_dir) do
+            local book_id_match = file:match("^BookID_(%d+)%.epub$")
+            if book_id_match then
+                local_book_count = local_book_count + 1
+                local local_book_id = tonumber(book_id_match)
+                if local_book_id and not shelf_book_ids[local_book_id] then
+                    -- Book exists locally but not in shelf - delete it
+                    local filepath = download_dir .. "/" .. file
+                    self:logInfo("BookloreSync: Book ID", local_book_id, "not in shelf, deleting:", filepath)
+
+                    local delete_ok, delete_err = os.remove(filepath)
+                    if delete_ok then
+                        deleted = deleted + 1
+                        self:logInfo("BookloreSync: Successfully deleted:", file)
+                        -- Note: Book cache entry will become orphaned but harmless
+                    else
+                        self:logWarn("BookloreSync: Failed to delete:", file, "-", delete_err)
+                        errors = errors + 1
+                    end
+                end
+            end
+        end
+
+        self:logInfo("BookloreSync: Found", local_book_count, "local BookID_*.epub files")
+        if deleted > 0 then
+            self:logInfo("BookloreSync: Deleted", deleted, "books removed from shelf")
+        else
+            self:logInfo("BookloreSync: No books needed deletion")
+        end
+    else
+        self:logInfo("BookloreSync: Bidirectional sync disabled - skipping deletion check")
+    end
+
     local result_msg = string.format(
-        "Sync complete!\nDownloaded: %d\nAlready present: %d\nErrors: %d\nTotal in shelf: %d",
-        downloaded, skipped, errors, #books
+        "Sync complete!\nDownloaded: %d\nAlready present: %d\nDeleted: %d\nErrors: %d\nTotal in shelf: %d",
+        downloaded, skipped, deleted, errors, #books
     )
 
     return true, result_msg
@@ -698,6 +760,28 @@ function BookloreSync:addToMainMenu(menu_items)
                         text = self.auto_sync_shelf_on_resume and
                                _("Auto-sync on wake enabled - books will be downloaded automatically when device wakes") or
                                _("Auto-sync on wake disabled"),
+                        timeout = 3,
+                    })
+                end,
+            },
+            {
+                text = _("Delete Removed Books"),
+                help_text = _("When syncing from shelf, automatically delete local BookID_*.epub files that are no longer in your Booklore shelf. Use with caution!"),
+                checked_func = function()
+                    return self.delete_removed_shelf_books
+                end,
+                enabled_func = function()
+                    return self.booklore_username and self.booklore_username ~= "" and
+                           self.booklore_password and self.booklore_password ~= ""
+                end,
+                callback = function()
+                    self.delete_removed_shelf_books = not self.delete_removed_shelf_books
+                    self.settings:saveSetting("delete_removed_shelf_books", self.delete_removed_shelf_books)
+                    self.settings:flush()
+                    UIManager:show(InfoMessage:new{
+                        text = self.delete_removed_shelf_books and
+                               _("Delete removed books enabled - local books not in shelf will be deleted during sync") or
+                               _("Delete removed books disabled"),
                         timeout = 3,
                     })
                 end,
@@ -1906,33 +1990,31 @@ function BookloreSync:onSuspend()
     if not self.is_enabled then
         return false
     end
-    
+
     self:logInfo("BookloreSync: Device suspending")
-    
+
     -- Always end current session and queue it
     self:endSession({ silent = true, force_queue = true })
-    
+
     -- Check if force push on suspend is enabled
+    -- Note: This only works if WiFi is already connected
+    -- We do NOT turn on WiFi during suspend (battery drain)
+    self:logInfo("BookloreSync: WiFi state on suspend:", NetworkMgr:isConnected() and "CONNECTED" or "DISCONNECTED")
+
     if self.force_push_session_on_suspend then
         self:logInfo("BookloreSync: Force push on suspend enabled")
-        
-        -- Check if we should connect to network first
-        if self.connect_network_on_suspend then
-            self:logInfo("BookloreSync: Attempting to connect to network before sync")
-            local network_ok = self:connectNetwork()
-            
-            if not network_ok then
-                self:logWarn("BookloreSync: Network connection failed, will attempt sync anyway")
-            end
+
+        -- Only sync if network is already connected
+        if NetworkMgr:isConnected() then
+            self:logInfo("BookloreSync: Network already connected on suspend, syncing pending sessions")
+            self:syncPendingSessions(true) -- true = silent mode
+        else
+            self:logInfo("BookloreSync: Network not connected on suspend, sessions will sync on resume")
         end
-        
-        -- Force sync all pending sessions silently
-        self:logInfo("BookloreSync: Force syncing pending sessions on suspend")
-        self:syncPendingSessions(true) -- true = silent mode
     else
         self:logInfo("BookloreSync: Force push on suspend disabled, sessions will sync on resume")
     end
-    
+
     return false
 end
 
@@ -1946,11 +2028,27 @@ function BookloreSync:onResume()
 
     self:logInfo("BookloreSync: Device resuming")
 
+    -- Connect to network first if enabled (for syncing)
+    if not self.manual_sync_only and self.connect_network_on_suspend then
+        self:logInfo("BookloreSync: Attempting to connect to network on resume")
+        self:logInfo("BookloreSync: Current WiFi state before connection:", NetworkMgr:isConnected() and "CONNECTED" or "DISCONNECTED")
+        local network_ok = self:connectNetwork()
+
+        if network_ok then
+            self:logInfo("BookloreSync: Network connected successfully on resume")
+            self:logInfo("BookloreSync: WiFi state after connection:", NetworkMgr:isConnected() and "CONNECTED" or "DISCONNECTED")
+        else
+            self:logWarn("BookloreSync: Network connection failed on resume, will attempt sync anyway")
+        end
+    else
+        self:logInfo("BookloreSync: Skipping network connection - manual_sync_only:", self.manual_sync_only, "connect_network_on_suspend:", self.connect_network_on_suspend)
+    end
+
     -- Try to sync pending sessions in the background
     if not self.manual_sync_only then
         self:logInfo("BookloreSync: Attempting background sync on resume")
         self:syncPendingSessions(true) -- silent sync
-        
+
         -- Delay network-dependent tasks to allow Wi-Fi hardware to reconnect
         UIManager:scheduleIn(10, function()
             if NetworkMgr:isConnected() then
@@ -2797,7 +2895,7 @@ function BookloreSync:_uploadSessionsWithBatching(book_id, book_type, sessions)
         self:logInfo("BookloreSync: Attempting batch", batch_num, "of", batch_count, "with", (end_idx - start_idx + 1), "sessions")
         local success, message, code = self.api:submitSessionBatch(book_id, book_type, batch_sessions)
         self:logInfo("BookloreSync: Batch", batch_num, "result - success:", tostring(success), "code:", tostring(code or "nil"), "message:", tostring(message or "nil"))
-        
+
         if success then
             -- Mark all sessions in batch as synced
             for i = start_idx, end_idx do
@@ -2805,29 +2903,38 @@ function BookloreSync:_uploadSessionsWithBatching(book_id, book_type, sessions)
                 synced_count = synced_count + 1
             end
             self:logInfo("BookloreSync: Batch", batch_num, "of", batch_count, "uploaded successfully (" .. (end_idx - start_idx + 1) .. " sessions)")
-        elseif code == 404 or code == 403 then
-            -- Server doesn't have batch endpoint (404/403) OR book not found (404)
+        elseif code == 404 then
+            -- Server doesn't have batch endpoint (404) OR book not found (404)
             -- Fallback to individual upload to determine which
-            self:logWarn("BookloreSync: Batch returned", code, "falling back to individual upload for batch", batch_num)
-            
+            self:logWarn("BookloreSync: Batch returned 404 - falling back to individual upload for batch", batch_num)
+
             for i = start_idx, end_idx do
                 local session = sessions[i]
+                self:logInfo("BookloreSync: Attempting individual upload for session", session.id, "(" .. (i - start_idx + 1) .. " of " .. (end_idx - start_idx + 1) .. ")")
                 local single_success, single_message, single_code = self:_submitSingleSession(session)
-                
+                self:logInfo("BookloreSync: Session", session.id, "result - success:", tostring(single_success), "code:", tostring(single_code or "nil"), "message:", tostring(single_message or "nil"))
+
                 if single_success then
                     self.db:markHistoricalSessionSynced(session.id)
                     synced_count = synced_count + 1
                 elseif single_code == 404 then
-                    self:logWarn("BookloreSync: Book ID", book_id, "not found on server (404), marking session for re-matching")
+                    self:logWarn("BookloreSync: Book ID", book_id, "not found on server (404), marking session", session.id, "for re-matching")
                     self.db:markHistoricalSessionUnmatched(session.id)
                     not_found_count = not_found_count + 1
                 else
+                    self:logWarn("BookloreSync: Session", session.id, "failed - code:", tostring(single_code or "nil"), "message:", tostring(single_message or "nil"))
                     failed_count = failed_count + 1
                 end
             end
+        elseif code == 403 then
+            -- Authentication/permission error - cannot be fixed by retrying individually
+            self:logErr("BookloreSync: Batch upload failed with 403 Forbidden - authentication or permission error")
+            self:logErr("BookloreSync: Please check your Booklore credentials and server permissions")
+            self:logErr("BookloreSync: All", (end_idx - start_idx + 1), "sessions in batch", batch_num, "marked as failed")
+            failed_count = failed_count + (end_idx - start_idx + 1)
         else
             -- Other error: all sessions in batch failed
-            self:logErr("BookloreSync: Batch upload failed for batch", batch_num, "of", batch_count, 
+            self:logErr("BookloreSync: Batch upload failed for batch", batch_num, "of", batch_count,
                        "(" .. (end_idx - start_idx + 1) .. " sessions) - Error:", message, "Code:", tostring(code or "nil"))
             failed_count = failed_count + (end_idx - start_idx + 1)
         end
