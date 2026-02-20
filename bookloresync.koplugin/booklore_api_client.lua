@@ -28,10 +28,11 @@ do
                 return {
                     submit = function(self)
                         UIManager:scheduleIn(0.01, function()
-                            local ok, result = pcall(background_func)
+                            local results = { pcall(background_func) }
+                            local ok = table.remove(results, 1)
                             if callback_func then
                                 UIManager:nextTick(function()
-                                    callback_func(ok, result)
+                                    callback_func(ok, table.unpack(results))
                                 end)
                             end
                         end)
