@@ -2140,11 +2140,13 @@ function BookloreSync:syncPendingSessions(silent)
     end
     
     self.sync_in_progress = true
+    local info_msg
     if not silent and not self.silent_messages then
-        UIManager:show(InfoMessage:new{
+        info_msg = InfoMessage:new{
             text = T(_("Syncing %1 pending sessions..."), pending_count),
-            timeout = 2,
-        })
+            timeout = 0,  -- Persistent progress feedback for long-running sync
+        }
+        UIManager:show(info_msg)
     end
     
     AsyncTask:new(function()
@@ -2205,6 +2207,7 @@ function BookloreSync:syncPendingSessions(silent)
     end,
     function(success, result_ok, synced_count, failed_count)
         self.sync_in_progress = false
+        if info_msg then UIManager:close(info_msg) end
         if not success or not result_ok then
             self:logErr("BookloreSync: syncPendingSessions failed")
             return
@@ -2253,10 +2256,24 @@ function BookloreSync:syncPendingDeletions(silent)
     self.sync_in_progress = true
     self:logInfo("BookloreSync: Syncing", #deletions, "pending deletions")
     
+    local info_msg
+    if not silent then
+        info_msg = InfoMessage:new{
+            text = T(_("Syncing %1 pending deletions..."), #deletions),
+            timeout = 0,  -- Persistent progress feedback for long-running sync
+        }
+        UIManager:show(info_msg)
+    end
+    
     AsyncTask:new(function()
         return pcall(function()
             -- Update API client with current credentials
             self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
+            
+            -- Cache shelf and token outside loop to avoid repeated synchronous calls
+            local shelf_ok, shelf_id = self.api:getOrCreateShelf(self.booklore_shelf_name, self.booklore_username, self.booklore_password)
+            local token_ok, token = self.api:getOrRefreshBearerToken(self.booklore_username, self.booklore_password)
+            
             local synced_count = 0
             local failed_count = 0
             local skipped_count = 0
@@ -2277,9 +2294,7 @@ function BookloreSync:syncPendingDeletions(silent)
                 end
 
                 if book_id then
-                    local shelf_ok, shelf_id = self.api:getOrCreateShelf(self.booklore_shelf_name, self.booklore_username, self.booklore_password)
-                    local token_ok, token = self.api:getOrRefreshBearerToken(self.booklore_username, self.booklore_password)
-                    
+                    -- Use cached shelf and token
                     if shelf_ok and token_ok then
                         local payload = string.format('{"bookIds":[%d],"shelvesToUnassign":[%d],"shelvesToAssign":[]}', book_id, shelf_id)
                         local headers = { ["Authorization"] = "Bearer " .. token, ["Content-Type"] = "application/json" }
@@ -2307,6 +2322,7 @@ function BookloreSync:syncPendingDeletions(silent)
     end,
     function(success, result_ok, synced_count, failed_count, skipped_count)
         self.sync_in_progress = false
+        if info_msg then UIManager:close(info_msg) end
         if not success or not result_ok then
             self:logErr("BookloreSync: syncPendingDeletions failed")
             return
@@ -3727,57 +3743,63 @@ function BookloreSync:_performResyncHistoricalData()
     -- Show initial progress
     local progress_msg = InfoMessage:new{
         text = T(_("Re-syncing historical sessions...\n\n0 / %1 books (0 sessions)"), total_books),
+        timeout = 0,  -- Persistent progress feedback
     }
     UIManager:show(progress_msg)
     
-    local books_completed = 0
-    local total_synced = 0
-    local total_failed = 0
-    local total_not_found = 0
-    
-    -- Upload each book's sessions as batch
-    for book_id, book_data in pairs(grouped) do
-        books_completed = books_completed + 1
-        
-        -- Batch upload sessions for this book
-        local synced, failed, not_found = 
-            self:_uploadSessionsWithBatching(book_id, book_data.book_type, book_data.sessions)
-        
-        total_synced = total_synced + synced
-        total_failed = total_failed + failed
-        total_not_found = total_not_found + not_found
-        
-        self:logInfo("BookloreSync: Book", book_id, "- synced:", synced, 
-                    "failed:", failed, "not found:", not_found)
-        
-        -- Update progress after each book
+    AsyncTask:new(function()
+        return pcall(function()
+            local books_completed = 0
+            local total_synced = 0
+            local total_failed = 0
+            local total_not_found = 0
+            
+            -- Upload each book's sessions as batch
+            for book_id, book_data in pairs(grouped) do
+                books_completed = books_completed + 1
+                
+                -- Batch upload sessions for this book
+                local synced, failed, not_found = 
+                    self:_uploadSessionsWithBatching(book_id, book_data.book_type, book_data.sessions)
+                
+                total_synced = total_synced + synced
+                total_failed = total_failed + failed
+                total_not_found = total_not_found + not_found
+                
+                self:logInfo("BookloreSync: Book", book_id, "- synced:", synced, 
+                            "failed:", failed, "not found:", not_found)
+            end
+            
+            return true, total_books, total_synced, total_failed, total_not_found
+        end)
+    end,
+    function(success, result_ok, total_books, total_synced, total_failed, total_not_found)
         UIManager:close(progress_msg)
-        progress_msg = InfoMessage:new{
-            text = T(_("Re-syncing historical sessions...\n\n%1 / %2 books (%3 sessions synced)\n\nSynced: %4\nFailed: %5\n404 errors: %6"),
-                books_completed, total_books, total_synced + total_failed + total_not_found,
-                total_synced, total_failed, total_not_found),
-        }
-        UIManager:show(progress_msg)
-        UIManager:forceRePaint()
-    end
-    
-    -- Close progress, show results
-    UIManager:close(progress_msg)
-    
-    local result_text = T(_("Re-sync complete!\n\nSuccessfully synced: %1\nFailed: %2\nMarked for re-matching (404): %3"), 
-        total_synced, total_failed, total_not_found)
-    
-    if total_not_found > 0 then
-        result_text = result_text .. _("\n\nUse 'Match Historical Data' to re-match sessions with 404 errors.")
-    end
-    
-    UIManager:show(InfoMessage:new{
-        text = result_text,
-        timeout = 5,
-    })
-    
-    self:logInfo("BookloreSync: Re-sync complete - synced:", total_synced, 
-                "failed:", total_failed, "not found:", total_not_found)
+        
+        if not success or not result_ok then
+            self:logErr("BookloreSync: resyncHistoricalData failed")
+            UIManager:show(InfoMessage:new{
+                text = _("Re-sync failed: unknown error"),
+                timeout = 5,
+            })
+            return
+        end
+        
+        local result_text = T(_("Re-sync complete!\n\nSuccessfully synced: %1\nFailed: %2\nMarked for re-matching (404): %3"), 
+            total_synced, total_failed, total_not_found)
+        
+        if total_not_found > 0 then
+            result_text = result_text .. _("\n\nUse 'Match Historical Data' to re-match sessions with 404 errors.")
+        end
+        
+        UIManager:show(InfoMessage:new{
+            text = result_text,
+            timeout = 5,
+        })
+        
+        self:logInfo("BookloreSync: Re-sync complete - synced:", total_synced, 
+                    "failed:", total_failed, "not found:", total_not_found)
+    end):submit()
 end
 
 function BookloreSync:syncRematchedSessions()

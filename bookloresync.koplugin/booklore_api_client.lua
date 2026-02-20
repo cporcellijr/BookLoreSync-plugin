@@ -35,7 +35,10 @@ local function redactUrls(message)
         message = tostring(message)
     end
     -- Match http:// or https:// URLs and replace them with [URL REDACTED]
-    return message:gsub("https?://[^%s]+", "[URL REDACTED]")
+    message = message:gsub("https?://[^%s]+", "[URL REDACTED]")
+    -- Task E: Extend redactUrls to also catch data: URLs
+    message = message:gsub("data:[^,%s]+base64,[^%s]+", "[DATA-URL REDACTED]")
+    return message
 end
 
 function APIClient:new(o)
@@ -533,6 +536,14 @@ function APIClient:loginBooklore(username, password)
     else
         local error_msg = response or "Login failed"
         
+        -- Task C: Improve user feedback when bearer token refresh / login fails
+        if string.find(tostring(code), "0") or code == nil then
+             UIManager:show(InfoMessage:new{
+                 text = _("Cannot connect to Booklore server.\nCheck URL, internet, or server status."),
+                 timeout = 5,
+             })
+        end
+
         -- Check for duplicate token error (server-side bug)
         if type(error_msg) == "string" and error_msg:find("Duplicate entry") and error_msg:find("uq_refresh_token") then
             self:logWarn("BookloreSync API: Duplicate refresh token error (server-side bug)")
