@@ -14,7 +14,30 @@ local https = require("ssl.https")
 local ltn12 = require("ltn12")
 local json = require("json")
 local md5 = require("ffi/sha2").md5
-local AsyncTask = require("ui/task")
+local UIManager = require("ui/uimanager")
+-- Safe AsyncTask with fallback for older KOReader versions
+local AsyncTask
+do
+    local ok, mod = pcall(require, "ui/task")
+    if ok then
+        AsyncTask = mod
+    else
+        -- Fallback: schedule on UI thread
+        AsyncTask = {
+            new = function(_, background_func, callback_func)
+                UIManager:scheduleIn(0.01, function()
+                    local ok, result = pcall(background_func)
+                    if callback_func then
+                        UIManager:nextTick(function()
+                            callback_func(ok, result)
+                        end)
+                    end
+                end)
+                return {}
+            end
+        }
+    end
+end
 
 local APIClient = {
     server_url = nil,

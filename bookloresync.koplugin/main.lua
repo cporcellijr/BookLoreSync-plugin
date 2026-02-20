@@ -16,7 +16,29 @@ local NetworkMgr = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local ConfirmBox = require("ui/widget/confirmbox")
-local AsyncTask = require("ui/task")
+-- Safe AsyncTask with fallback for older KOReader versions
+local AsyncTask
+do
+    local ok, mod = pcall(require, "ui/task")
+    if ok then
+        AsyncTask = mod
+    else
+        -- Fallback: schedule on UI thread
+        AsyncTask = {
+            new = function(_, background_func, callback_func)
+                UIManager:scheduleIn(0.01, function()
+                    local ok, result = pcall(background_func)
+                    if callback_func then
+                        UIManager:nextTick(function()
+                            callback_func(ok, result)
+                        end)
+                    end
+                end)
+                return {}
+            end
+        }
+    end
+end
 local ButtonDialog = require("ui/widget/buttondialog")
 local Settings = require("booklore_settings")
 local Database = require("booklore_database")
