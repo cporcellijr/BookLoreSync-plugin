@@ -14,6 +14,9 @@ local https = require("ssl.https")
 local ltn12 = require("ltn12")
 local json = require("json")
 local md5 = require("ffi/sha2").md5
+local UIManager = require("ui/uimanager")
+local InfoMessage = require("ui/widget/infomessage")
+local _ = require("gettext")
 
 local APIClient = {
     server_url = nil,

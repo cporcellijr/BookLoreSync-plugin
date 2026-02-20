@@ -28,7 +28,7 @@ local _ = require("gettext")
 local T = require("ffi/util").template
 
 local BookloreSync = WidgetContainer:extend{
-    name = "booklore",
+    name = "bookloresync",
     is_doc_only = false,
 }
 
