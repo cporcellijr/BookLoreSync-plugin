@@ -3,6 +3,8 @@
 ## 1. BRANCH CONTEXT / DEEP DIVE
 *(Generated at branch start. Source of truth for architectural context.)*
 
+*(Generated at branch start. Source of truth for architectural context.)*
+
 ### 1.1 Architecture & Core Components
 - **Entry Points**: `main.lua` and `booklore_api_client.lua`
 - **Dependencies**: KOReader `ui/task` module
