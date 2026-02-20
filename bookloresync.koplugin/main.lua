@@ -45,7 +45,10 @@ local function redactUrls(message)
         message = tostring(message)
     end
     -- Match http:// or https:// URLs and replace them with [URL REDACTED]
-    return message:gsub("https?://[^%s]+", "[URL REDACTED]")
+    message = message:gsub("https?://[^%s]+", "[URL REDACTED]")
+    -- Task E: Extend redactUrls to also catch data: URLs
+    message = message:gsub("data:[^,%s]+base64,[^%s]+", "[DATA-URL REDACTED]")
+    return message
 end
 
 -- Secure logger wrappers
@@ -163,6 +166,9 @@ function BookloreSync:init()
     self.initial_scan_done = self.settings:readSetting("initial_scan_done") or false
     self.scan_in_progress = false
     self.scan_progress = { current = 0, total = 0 }
+    
+    -- Task B: Cooldown for auto-sync
+    self.last_auto_sync_time = 0
 
     -- Current reading session tracking
     self.current_session = nil
@@ -299,6 +305,14 @@ function BookloreSync:init()
     if not self.initial_scan_done
        and self.booklore_username and self.booklore_username ~= ""
        and self.booklore_password and self.booklore_password ~= "" then
+        
+        -- Task F: Skip initial scan dialog in silent_messages mode
+        if self.silent_messages then
+            self:logInfo("BookloreSync: Silent mode active, auto-running initial scan")
+            self:scanLibrary(true)
+            return
+        end
+
         UIManager:scheduleIn(3, function()
             self:_showInitialScanDialog()
         end)
@@ -517,147 +531,106 @@ function BookloreSync:syncFromBookloreShelf()
     -- Check if Booklore credentials are configured
     if not self.booklore_username or self.booklore_username == "" or
        not self.booklore_password or self.booklore_password == "" then
-        return false, "Booklore credentials not configured. Please configure your Booklore account first."
+        UIManager:show(InfoMessage:new{
+            text = _("Booklore credentials not configured. Please configure your Booklore account first."),
+            timeout = 3,
+        })
+        return false
     end
 
-    self:logInfo("BookloreSync: syncFromBookloreShelf — starting sync from shelf:", self.booklore_shelf_name)
+    local info_msg = InfoMessage:new{
+        text = _("Syncing books from Booklore shelf..."),
+        timeout = 0,
+    }
+    UIManager:show(info_msg)
 
-    -- Get or create shelf by name
-    local shelf_ok, shelf_id = self.api:getOrCreateShelf(self.booklore_shelf_name, self.booklore_username, self.booklore_password)
-    if not shelf_ok then
-        return false, "Failed to get or create shelf: " .. (shelf_id or "unknown error")
-    end
-
-    -- Update shelf_id if it changed
-    if shelf_id ~= self.shelf_id then
-        self:logInfo("BookloreSync: Shelf ID updated from", self.shelf_id, "to", shelf_id)
-        self.shelf_id = shelf_id
-        self.settings:saveSetting("shelf_id", self.shelf_id)
-        self.settings:flush()
-    end
-
-    -- Get books in shelf
-    local books_ok, books = self.api:getBooksInShelf(shelf_id, self.booklore_username, self.booklore_password)
-    if not books_ok then
-        return false, "Failed to retrieve books from shelf: " .. (books or "unknown error")
-    end
-
-    if type(books) ~= "table" or #books == 0 then
-        return true, "Shelf is empty - no books to sync"
-    end
-
-    self:logInfo("BookloreSync: syncFromBookloreShelf — found", #books, "books in shelf")
-
-    local download_dir = self.download_dir
-
-    -- Check if download directory exists
-    local lfs = require("libs/libkoreader-lfs")
-    if lfs.attributes(download_dir, "mode") ~= "directory" then
-        return false, "Download directory does not exist: " .. download_dir
-    end
-
-    local downloaded = 0
-    local skipped = 0
-    local errors = 0
-
-    -- Build set of book IDs in shelf for deletion check
-    local shelf_book_ids = {}
-    for _, book in ipairs(books) do
-        local book_id = tonumber(book.id)
-        if book_id then
-            shelf_book_ids[book_id] = true
-        end
-    end
-
-    for _, book in ipairs(books) do
-        local book_id = tonumber(book.id)
-
-        if not book_id then
-            self:logWarn("BookloreSync: syncFromBookloreShelf — skipping book with invalid ID:", book.id)
-            errors = errors + 1
-        else
-            -- Task 3: Streamline the File Existence Check
-            -- Generate the expected filename and filepath immediately inside the loop
-            local filename = self:_generateFilename(book)
-            local filepath = download_dir .. "/" .. filename
-
-            -- Use lfs.attributes(filepath, "mode") == "file" to check if the file physically exists on the device
-            if lfs.attributes(filepath, "mode") == "file" then
-                self:logInfo("BookloreSync: syncFromBookloreShelf — book already exists locally:", filepath)
-                -- If it exists: skip the download, but ensure the database cache is updated
-                local hash = self:calculateBookHash(filepath)
-                self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
-                skipped = skipped + 1
-            else
-                -- If it does not exist: call self.api:downloadBook, then calculate the hash and save it to the database cache
-                self:logInfo("BookloreSync: syncFromBookloreShelf — downloading book:", book.title)
-                local download_ok, download_err = self.api:downloadBook(book_id, filepath, self.booklore_username, self.booklore_password)
-                if download_ok then
-                    self:logInfo("BookloreSync: syncFromBookloreShelf — downloaded:", book.title)
-                    local hash = self:calculateBookHash(filepath)
-                    self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
-                    downloaded = downloaded + 1
-                else
-                    self:logWarn("BookloreSync: syncFromBookloreShelf — download failed for:", book.title, download_err)
-                    errors = errors + 1
-                end
+    UIManager:scheduleIn(0, function()
+        self:logInfo("BookloreSync: syncFromBookloreShelf — starting async sync")
+        
+        local success, result = pcall(function()
+            -- Get or create shelf
+            local shelf_ok, shelf_id = self.api:getOrCreateShelf(self.booklore_shelf_name, self.booklore_username, self.booklore_password)
+            if not shelf_ok then error(shelf_id or "Failed to get/create shelf") end
+            
+            -- Update shelf_id
+            if shelf_id ~= self.shelf_id then
+                self.shelf_id = shelf_id
+                self.settings:saveSetting("shelf_id", self.shelf_id)
+                self.settings:flush()
             end
-        end
-    end
 
-    -- Bidirectional sync: Remove local BookID_*.epub files not in shelf
-    local deleted = 0
-    if self.delete_removed_shelf_books then
-        self:logInfo("BookloreSync: Bidirectional sync enabled - checking for local books removed from shelf")
+            -- Get books
+            local books_ok, books = self.api:getBooksInShelf(shelf_id, self.booklore_username, self.booklore_password)
+            if not books_ok then error(books or "Failed to retrieve books") end
+            
+            if type(books) ~= "table" or #books == 0 then
+                return "Shelf is empty - no books to sync"
+            end
 
-        -- Count shelf book IDs (table keys, not array length)
-        local shelf_count = 0
-        for _ in pairs(shelf_book_ids) do
-            shelf_count = shelf_count + 1
-        end
-        self:logInfo("BookloreSync: Shelf contains", shelf_count, "books")
+            local download_dir = self.download_dir
+            local lfs = require("libs/libkoreader-lfs")
+            local downloaded = 0
+            local skipped = 0
+            local deleted = 0
+            local errors = 0
 
-        -- Scan for BookID_*.epub files in download directory
-        local local_book_count = 0
-        for file in lfs.dir(download_dir) do
-            local book_id_match = file:match("^BookID_(%d+)%.epub$")
-            if book_id_match then
-                local_book_count = local_book_count + 1
-                local local_book_id = tonumber(book_id_match)
-                if local_book_id and not shelf_book_ids[local_book_id] then
-                    -- Book exists locally but not in shelf - delete it
-                    local filepath = download_dir .. "/" .. file
-                    self:logInfo("BookloreSync: Book ID", local_book_id, "not in shelf, deleting:", filepath)
+            -- Build set of IDs for bidirectional sync
+            local shelf_book_ids = {}
+            for _, book in ipairs(books) do
+                local book_id = tonumber(book.id)
+                if book_id then
+                    shelf_book_ids[book_id] = true
+                    local filename = self:_generateFilename(book)
+                    local filepath = download_dir .. "/" .. filename
 
-                    local delete_ok, delete_err = os.remove(filepath)
-                    if delete_ok then
-                        deleted = deleted + 1
-                        self:logInfo("BookloreSync: Successfully deleted:", file)
-                        -- Note: Book cache entry will become orphaned but harmless
+                    if lfs.attributes(filepath, "mode") == "file" then
+                        -- Update cache if needed
+                        local hash = self:calculateBookHash(filepath)
+                        self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
+                        skipped = skipped + 1
                     else
-                        self:logWarn("BookloreSync: Failed to delete:", file, "-", delete_err)
-                        errors = errors + 1
+                        -- Download
+                        local dl_ok, dl_err = self.api:downloadBook(book_id, filepath, self.booklore_username, self.booklore_password)
+                        if dl_ok then
+                            local hash = self:calculateBookHash(filepath)
+                            self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
+                            downloaded = downloaded + 1
+                        else
+                            errors = errors + 1
+                            self:logWarn("BookloreSync: Failed to download book:", book.title, dl_err)
+                        end
                     end
                 end
             end
-        end
 
-        self:logInfo("BookloreSync: Found", local_book_count, "local BookID_*.epub files")
-        if deleted > 0 then
-            self:logInfo("BookloreSync: Deleted", deleted, "books removed from shelf")
-        else
-            self:logInfo("BookloreSync: No books needed deletion")
-        end
-    else
-        self:logInfo("BookloreSync: Bidirectional sync disabled - skipping deletion check")
-    end
+            -- Bidirectional sync: Remove local books not in shelf
+            if self.delete_removed_shelf_books then
+                for file in lfs.dir(download_dir) do
+                    local book_id_match = file:match("^BookID_(%d+)%.epub$")
+                    if book_id_match then
+                        local local_book_id = tonumber(book_id_match)
+                        if local_book_id and not shelf_book_ids[local_book_id] then
+                            local filepath = download_dir .. "/" .. file
+                            if os.remove(filepath) then
+                                deleted = deleted + 1
+                            else
+                                errors = errors + 1
+                            end
+                        end
+                    end
+                end
+            end
+            
+            return T(_("Sync complete!\n\nDownloaded: %1\nSkipped: %2\nDeleted: %3\nErrors: %4"), 
+                     downloaded, skipped, deleted, errors)
+        end)
 
-    local result_msg = string.format(
-        "Sync complete!\nDownloaded: %d\nAlready present: %d\nDeleted: %d\nErrors: %d\nTotal in shelf: %d",
-        downloaded, skipped, deleted, errors, #books
-    )
+        UIManager:close(info_msg)
+        local msg = success and result or (T(_("Sync failed: %1"), result))
+        UIManager:show(InfoMessage:new{ text = msg, timeout = 5 })
+    end)
 
-    return true, result_msg
+    return true
 end
 
 --[[--
@@ -723,125 +696,89 @@ function BookloreSync:scanLibrary(silent)
     self.scan_in_progress = true
     self.scan_progress = { current = 0, total = 0 }
 
-    -- Show start message
+    local info_msg
     if not silent then
-        UIManager:show(InfoMessage:new{
-            text = _("Scanning library for books...\nThis will run in the background."),
-            timeout = 2,
-        })
+        info_msg = InfoMessage:new{
+            text = _("Scanning Booklore library..."),
+            timeout = 0,
+        }
+        UIManager:show(info_msg)
     end
 
-    -- Collect all EPUB files
-    local files = {}
+    UIManager:scheduleIn(0, function()
+        -- FIX: capture both return values: success (bool) and result (table|string)
+        local success, books = self.api:getBooksInShelf(
+            self.shelf_id,
+            self.booklore_username,
+            self.booklore_password
+        )
 
-    -- Scan download_dir
-    if self.download_dir and self.download_dir ~= "" then
-        local lfs = require("libs/libkoreader-lfs")
-        if lfs.attributes(self.download_dir, "mode") == "directory" then
-            self:logInfo("BookloreSync: Scanning download directory:", self.download_dir)
-            self:_scanDirectory(self.download_dir, files)
-        end
-    end
-
-    -- Scan KOReader home directory
-    local home_dir = require("ui/data/onetime_migration"):getDocsDir()
-    if home_dir and home_dir ~= "" and home_dir ~= self.download_dir then
-        local lfs = require("libs/libkoreader-lfs")
-        if lfs.attributes(home_dir, "mode") == "directory" then
-            self:logInfo("BookloreSync: Scanning KOReader home directory:", home_dir)
-            self:_scanDirectory(home_dir, files)
-        end
-    end
-
-    self:logInfo("BookloreSync: Found", #files, "EPUB files")
-
-    -- Filter out files already in database
-    local files_to_process = {}
-    for _, filepath in ipairs(files) do
-        local cached = self.db:getBookByFilePath(filepath)
-        if not cached then
-            table.insert(files_to_process, filepath)
-        end
-    end
-
-    self:logInfo("BookloreSync: Processing", #files_to_process, "new files")
-    self.scan_progress.total = #files_to_process
-
-    if #files_to_process == 0 then
-        self.scan_in_progress = false
-        if not silent then
-            UIManager:show(InfoMessage:new{
-                text = _("All books already in database"),
-                timeout = 2,
-            })
-        end
-        return
-    end
-
-    -- Process files in batches
-    local batch_size = 10
-    local current_index = 1
-    local matched_count = 0
-
-    local function processBatch()
-        local batch_end = math.min(current_index + batch_size - 1, #files_to_process)
-
-        for i = current_index, batch_end do
-            local filepath = files_to_process[i]
-            self:logInfo("BookloreSync: Processing file", i, "of", #files_to_process, ":", filepath)
-
-            -- Calculate hash
-            local hash = self:calculateBookHash(filepath)
-            if hash then
-                -- Look up book on server
-                local book_id, isbn10, isbn13, title, author = nil, nil, nil, nil, nil
-
-                if NetworkMgr:isConnected() then
-                    local success, book_data = self.api:getBookByHash(hash)
-                    if success and book_data then
-                        book_id = book_data.id
-                        isbn10 = book_data.isbn10
-                        isbn13 = book_data.isbn13
-                        title = book_data.title
-                        author = book_data.author
-                        matched_count = matched_count + 1
-                    end
-                end
-
-                -- Save to database (book_id may be nil if not found)
-                self.db:saveBookCache(filepath, hash, book_id, title, author, isbn10, isbn13)
+        if not success then
+            self:logErr("BookloreSync: scanLibrary — failed to fetch books from shelf:", books)
+            self.scan_in_progress = false
+            if info_msg then UIManager:close(info_msg) end
+            if not silent then
+                UIManager:show(InfoMessage:new{
+                    text = _("Failed to retrieve books from Booklore shelf.\nPlease check your connection and credentials."),
+                    timeout = 5,
+                })
             end
-
-            self.scan_progress.current = i
+            return
         end
 
-        current_index = batch_end + 1
-
-        -- Schedule next batch or finish
-        if current_index <= #files_to_process then
-            UIManager:scheduleIn(0.1, processBatch)
-        else
-            -- Scan complete
-            self:logInfo("BookloreSync: Library scan complete -", matched_count, "matched,",
-                        #files_to_process - matched_count, "unmatched")
-
+        if type(books) ~= "table" or #books == 0 then
+            self:logInfo("BookloreSync: scanLibrary — shelf is empty")
             self.scan_in_progress = false
             self.initial_scan_done = true
             self.settings:saveSetting("initial_scan_done", true)
             self.settings:flush()
-
+            if info_msg then UIManager:close(info_msg) end
             if not silent then
                 UIManager:show(InfoMessage:new{
-                    text = T(_("Library scan complete!\n\nScanned: %1\nMatched: %2\nUnmatched: %3"),
-                            #files_to_process, matched_count, #files_to_process - matched_count),
-                    timeout = 5,
+                    text = _("Scan complete: your Booklore shelf is empty."),
+                    timeout = 3,
                 })
             end
+            return
         end
-    end
 
-    -- Start processing first batch after a brief delay
-    UIManager:scheduleIn(0.1, processBatch)
+        self:logInfo("BookloreSync: Found", #books, "books in shelf")
+        self.scan_progress.total = #books
+
+        -- Process books from shelf and update cache
+        local matched_count = 0
+        for i, book in ipairs(books) do
+            self.scan_progress.current = i
+            if info_msg then
+                info_msg:setText(T(_("Scanning Booklore library… (%1/%2)"), i, #books))
+                UIManager:forceRePaint()
+            end
+            
+            if book.id and book.file_hash then
+                self.db:updateBookId(book.file_hash, tonumber(book.id))
+                matched_count = matched_count + 1
+            end
+        end
+
+        if info_msg then
+            UIManager:close(info_msg)
+        end
+
+        self:logInfo("BookloreSync: Library scan complete -", matched_count, "items processed")
+
+        self.scan_in_progress = false
+        self.initial_scan_done = true
+        self.settings:saveSetting("initial_scan_done", true)
+        self.settings:flush()
+
+        if not silent then
+            UIManager:show(InfoMessage:new{
+                text = T(_("Library scan complete!\n\nProcessed: %1\nMatched: %2"),
+                        #books, matched_count),
+                timeout = 5,
+            })
+        end
+    end)
 end
 
 --[[--
@@ -1341,20 +1278,29 @@ function BookloreSync:testConnection()
     -- Update API client with current credentials
     self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
     
+    local info_msg = InfoMessage:new{
+        text = _("Testing connection..."),
+        timeout = 0,
+    }
+    UIManager:show(info_msg)
+
     -- Test authentication
-    local success, message = self.api:testAuth()
-    
-    if success then
-        UIManager:show(InfoMessage:new{
-            text = _("✓ Connection successful!\n\nAuthentication verified."),
-            timeout = 3,
-        })
-    else
-        UIManager:show(InfoMessage:new{
-            text = T(_("✗ Connection failed\n\n%1"), message),
-            timeout = 5,
-        })
-    end
+    UIManager:scheduleIn(0, function()
+        local success, message = self.api:testAuth()
+        UIManager:close(info_msg)
+        
+        if success then
+            UIManager:show(InfoMessage:new{
+                text = _("✓ Connection successful!\n\nAuthentication verified."),
+                timeout = 3,
+            })
+        else
+            UIManager:show(InfoMessage:new{
+                text = T(_("✗ Connection failed\n\n%1"), message),
+                timeout = 5,
+            })
+        end
+    end)
 end
 
 --[[--
@@ -2094,6 +2040,14 @@ function BookloreSync:onResume()
         return false
     end
 
+    -- Task B: Add 5-minute cooldown to on-resume auto-sync
+    local now = os.time()
+    if self.last_auto_sync_time and (now - self.last_auto_sync_time) < 300 then
+        self:logInfo("BookloreSync: Skipping resume auto-sync (cooldown active, last run", (now - self.last_auto_sync_time), "s ago)")
+        return false
+    end
+    self.last_auto_sync_time = now
+
     self:logInfo("BookloreSync: Device resuming")
 
     -- Sync pending items if WiFi is already connected
@@ -2101,6 +2055,14 @@ function BookloreSync:onResume()
         self:logInfo("BookloreSync: WiFi connected, syncing pending items")
         self:syncPendingSessions(true)
         self:syncPendingDeletions(true)
+        
+        -- Trigger shelf sync if enabled
+        if self.auto_sync_shelf_on_resume then
+            self:logInfo("BookloreSync: Triggering auto-sync from shelf on resume")
+            UIManager:scheduleIn(5, function()
+                self:syncFromBookloreShelf()
+            end)
+        end
     else
         self:logInfo("BookloreSync: WiFi not connected, skipping sync")
     end
@@ -2151,11 +2113,13 @@ function BookloreSync:syncPendingSessions(silent)
         })
     end
     
-    -- Update API client with current credentials
-    self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
-    
-    -- Get pending sessions from database
-    local sessions = self.db:getPendingSessions(100) -- Sync up to 100 at a time
+    UIManager:scheduleIn(0, function()
+        self:logInfo("BookloreSync: Starting async sync of pending sessions")
+        -- Update API client with current credentials
+        self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
+        
+        -- Get pending sessions from database
+        local sessions = self.db:getPendingSessions(100) -- Sync up to 100 at a time
     
     local synced_count = 0
     local failed_count = 0
@@ -2272,6 +2236,7 @@ function BookloreSync:syncPendingSessions(silent)
             timeout = 3,
         })
     end
+    end)
     
     return synced_count, failed_count
 end
@@ -2316,53 +2281,55 @@ function BookloreSync:syncPendingDeletions(silent)
     end
 
     self:logInfo("BookloreSync: Syncing", #deletions, "pending deletions")
+    
+    UIManager:scheduleIn(0, function()
+        local synced_count = 0
+        local failed_count = 0
+        local skipped_count = 0
 
-    local synced_count = 0
-    local failed_count = 0
-    local skipped_count = 0
+        for i, deletion in ipairs(deletions) do
+            self:logInfo("BookloreSync: Processing pending deletion", i, "of", #deletions, "- hash:", deletion.file_hash)
 
-    for i, deletion in ipairs(deletions) do
-        self:logInfo("BookloreSync: Processing pending deletion", i, "of", #deletions, "- hash:", deletion.file_hash)
+            -- Skip items that have failed too many times
+            if deletion.retry_count > 10 then
+                self:logWarn("BookloreSync: Deletion", i, "has exceeded retry limit, removing from queue")
+                self.db:removePendingDeletion(deletion.id)
+                skipped_count = skipped_count + 1
+                goto continue
+            end
 
-        -- Skip items that have failed too many times
-        if deletion.retry_count > 10 then
-            self:logWarn("BookloreSync: Deletion", i, "has exceeded retry limit, removing from queue")
-            self.db:removePendingDeletion(deletion.id)
-            skipped_count = skipped_count + 1
-            goto continue
+            -- Attempt the deletion with from_queue = true wrapped in pcall
+            local deletion_ok, api_success = pcall(function()
+                return self:notifyBookloreOnDeletion(deletion.file_hash, deletion.stem, deletion.book_id, true)
+            end)
+
+            if deletion_ok and api_success then
+                -- Assume success - remove from queue
+                self.db:removePendingDeletion(deletion.id)
+                synced_count = synced_count + 1
+                self:logInfo("BookloreSync: Deletion", i, "processed successfully")
+            else
+                -- Failed - increment retry count
+                self.db:incrementDeletionRetry(deletion.id)
+                failed_count = failed_count + 1
+                self:logWarn("BookloreSync: Deletion", i, "failed:", tostring(deletion_err))
+            end
+
+            ::continue::
         end
 
-        -- Attempt the deletion with from_queue = true wrapped in pcall
-        local deletion_ok, api_success = pcall(function()
-            return self:notifyBookloreOnDeletion(deletion.file_hash, deletion.stem, deletion.book_id, true)
-        end)
+        self:logInfo("BookloreSync: Deletion sync complete - synced:", synced_count,
+                    "failed:", failed_count, "skipped:", skipped_count)
 
-        if deletion_ok and api_success then
-            -- Assume success - remove from queue
-            self.db:removePendingDeletion(deletion.id)
-            synced_count = synced_count + 1
-            self:logInfo("BookloreSync: Deletion", i, "processed successfully")
-        else
-            -- Failed - increment retry count
-            self.db:incrementDeletionRetry(deletion.id)
-            failed_count = failed_count + 1
-            self:logWarn("BookloreSync: Deletion", i, "failed:", tostring(deletion_err))
+        if not silent then
+            if synced_count > 0 then
+                UIManager:show(InfoMessage:new{
+                    text = T(_("Synced %1 shelf removals"), synced_count),
+                    timeout = 2,
+                })
+            end
         end
-
-        ::continue::
-    end
-
-    self:logInfo("BookloreSync: Deletion sync complete - synced:", synced_count,
-                "failed:", failed_count, "skipped:", skipped_count)
-
-    if not silent then
-        if synced_count > 0 then
-            UIManager:show(InfoMessage:new{
-                text = T(_("Synced %1 shelf removals"), synced_count),
-                timeout = 2,
-            })
-        end
-    end
+    end)
 
     return synced_count, failed_count
 end
@@ -2374,6 +2341,15 @@ Queries the server for books cached while offline
 --]]
 function BookloreSync:resolveUnmatchedBooks(silent)
     silent = silent or false
+    -- Task B: Cooldown for unmatched books check
+    local now = os.time()
+    if not silent and self.last_auto_sync_time and (now - self.last_auto_sync_time) < 300 then
+        self:logInfo("BookloreSync: Skipping resolveUnmatchedBooks (cooldown active)")
+        return
+    end
+    if not silent then self.last_auto_sync_time = now end
+
+    local entries = self.db:getUnmatchedBooks()
     
     if not self.db then
         self:logErr("BookloreSync: Database not initialized")
@@ -2393,46 +2369,63 @@ function BookloreSync:resolveUnmatchedBooks(silent)
         return
     end
     
-    self:logInfo("BookloreSync: Resolving", #unmatched_books, "unmatched books")
+    self:logInfo("BookloreSync: resolveUnmatchedBooks — starting resolution")
     
-    -- Update API client with current credentials
-    self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
-    
-    local resolved_count = 0
-    
-    for _, book in ipairs(unmatched_books) do
-        if book.file_hash and book.file_hash ~= "" then
-            self:logInfo("BookloreSync: Resolving book:", book.file_path)
+    local info_msg
+    if not silent then
+        info_msg = InfoMessage:new{
+            text = _("Resolving unmatched books..."),
+            timeout = 0,
+        }
+        UIManager:show(info_msg)
+    end
+
+    UIManager:scheduleIn(0, function()
+        -- Update API client with current credentials
+        self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
+        
+        local resolved_count = 0
+        for i, book in ipairs(unmatched_books) do
+            if info_msg then
+                info_msg:setText(T(_("Resolving unmatched %1/%2"), i, #unmatched_books))
+                UIManager:forceRePaint()
+            end
             
-            local book_id, isbn10, isbn13 = self:getBookIdByHash(book.file_hash)
-            
-            if book_id then
-                self:logInfo("BookloreSync: Resolved book ID:", book_id)
-                -- Update cache with found book_id
-                self.db:saveBookCache(
-                    book.file_path,
-                    book.file_hash,
-                    book_id,
-                    book.title,
-                    book.author,
-                    isbn10,
-                    isbn13
-                )
-                resolved_count = resolved_count + 1
-            else
-                self:logInfo("BookloreSync: Book not found on server")
+            self:logInfo("BookloreSync: resolveUnmatchedBooks — searching for:", book.title or book.file_path)
+            -- Actual lookup...
+            if book.file_hash and book.file_hash ~= "" then
+                self:logInfo("BookloreSync: Resolving book:", book.file_path)
+                
+                local book_id, isbn10, isbn13 = self:getBookIdByHash(book.file_hash)
+                
+                if book_id then
+                    self:logInfo("BookloreSync: Resolved book ID:", book_id)
+                    -- Update cache with found book_id
+                    self.db:saveBookCache(
+                        book.file_path,
+                        book.file_hash,
+                        book_id,
+                        book.title,
+                        book.author,
+                        isbn10,
+                        isbn13
+                    )
+                    resolved_count = resolved_count + 1
+                else
+                    self:logInfo("BookloreSync: Book not found on server")
+                end
             end
         end
-    end
     
-    self:logInfo("BookloreSync: Resolved", resolved_count, "of", #unmatched_books, "books")
-    
-    if not silent and resolved_count > 0 and not self.silent_messages then
-        UIManager:show(InfoMessage:new{
-            text = T(_("Resolved %1 books from server"), resolved_count),
-            timeout = 2,
-        })
-    end
+        if info_msg then UIManager:close(info_msg) end
+        self:logInfo("BookloreSync: resolveUnmatchedBooks — complete, resolved:", resolved_count)
+        if not silent and resolved_count > 0 then
+            UIManager:show(InfoMessage:new{
+                text = T(_("Resolved %1 unmatched books"), resolved_count),
+                timeout = 3,
+            })
+        end
+    end)
     
     return resolved_count
 end

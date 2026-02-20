@@ -317,39 +317,45 @@ function Database:close()
 end
 
 function Database:getCurrentVersion()
-    -- Check if schema_version table exists
-    local stmt = self.conn:prepare([[
-        SELECT name FROM sqlite_master 
-        WHERE type='table' AND name='schema_version'
-    ]])
-    
-    if not stmt then
-        return 0
-    end
-    
-    local has_table = false
-    for row in stmt:rows() do
-        has_table = true
-        break
-    end
-    stmt:close()
-    
-    if not has_table then
-        return 0
-    end
-    
-    -- Get current version
-    stmt = self.conn:prepare("SELECT MAX(version) as version FROM schema_version")
-    if not stmt then
-        return 0
-    end
-    
+    -- Try PRAGMA user_version first
+    local stmt = self.conn:prepare("PRAGMA user_version")
     local version = 0
-    for row in stmt:rows() do
-        version = tonumber(row[1]) or 0
-        break
+    if stmt then
+        for row in stmt:rows() do
+            version = tonumber(row[1]) or 0
+            break
+        end
+        stmt:close()
     end
-    stmt:close()
+    
+    -- Fallback/Sync: If PRAGMA is 0, check old schema_version table
+    if version == 0 then
+        local check_stmt = self.conn:prepare([[
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='schema_version'
+        ]])
+        if check_stmt then
+            local has_table = false
+            for _ in check_stmt:rows() do has_table = true break end
+            check_stmt:close()
+            
+            if has_table then
+                local legacy_stmt = self.conn:prepare("SELECT MAX(version) FROM schema_version")
+                if legacy_stmt then
+                    for row in legacy_stmt:rows() do
+                        version = tonumber(row[1]) or 0
+                        break
+                    end
+                    legacy_stmt:close()
+                    -- Sync PRAGMA for future use
+                    if version > 0 then
+                        self.conn:exec("PRAGMA user_version = " .. version)
+                        logger.info("BookloreSync Database: Synced legacy schema_version", version, "to PRAGMA user_version")
+                    end
+                end
+            end
+        end
+    end
     
     return version
 end
@@ -391,44 +397,13 @@ function Database:runMigrations()
         end
         
         if success then
-            -- Record migration version
-            local stmt = self.conn:prepare("INSERT INTO schema_version (version) VALUES (?)")
-            if not stmt then
-                logger.err("BookloreSync Database: Failed to prepare version insert:", self.conn:errmsg())
-                self.conn:exec("ROLLBACK")
-                return false
-            end
-            
-            -- Ensure version is an integer
-            version = tonumber(version)
-            if not version then
-                logger.err("BookloreSync Database: Version is not a number")
-                stmt:close()
-                self.conn:exec("ROLLBACK")
-                return false
-            end
-            
-            logger.dbg("BookloreSync Database: Binding version:", version, "type:", type(version))
-            
-            local bind_ok, bind_err = pcall(function()
-                stmt:bind(version)
+            -- Update PRAGMA user_version
+            local pragma_ok, pragma_err = pcall(function()
+                self.conn:exec("PRAGMA user_version = " .. version)
             end)
             
-            if not bind_ok then
-                logger.err("BookloreSync Database: Bind failed:", bind_err)
-                stmt:close()
-                self.conn:exec("ROLLBACK")
-                return false
-            end
-            
-            logger.dbg("BookloreSync Database: Bind successful")
-            
-            local step_result = stmt:step()
-            logger.dbg("BookloreSync Database: Step result:", step_result)
-            stmt:close()
-            
-            if step_result ~= SQ3.DONE and step_result ~= SQ3.OK then
-                logger.err("BookloreSync Database: Failed to insert version:", self.conn:errmsg())
+            if not pragma_ok then
+                logger.err("BookloreSync Database: Failed to update PRAGMA user_version:", pragma_err)
                 self.conn:exec("ROLLBACK")
                 return false
             end
