@@ -2,7 +2,7 @@
 
 **Version:** 1.0.0-beta  
 **Status:** Ready for Testing  
-**Last Updated:** February 11, 2026
+**Last Updated:** February 20, 2026
 
 Automatically track your reading sessions in KOReader and sync them to your Booklore server.
 
@@ -447,6 +447,8 @@ SELECT * FROM pending_sessions;
 - ✅ **Optimized Sync Speed** - Bypasses MD5 hashing for books already in local cache
 - ✅ **Flash-Safe Logging** - Persistent file handle and lifecycle-aware closure to reduce flash storage wear
 - ✅ **Atomic Sync & Scan** - Bulk database operations wrapped in SQLite transactions for performance and integrity
+- ✅ **Safe UI & Token Recovery** - Safe dispatch for connection errors and automatic 401/403 retry handling
+- ✅ **Silent Background Sync** - Sync operations run fully in the background without UI interruption when reading
 
 ### New Features
 
@@ -528,5 +530,5 @@ For help:
 
 **Status:** Ready for testing! Follow [QUICK_START.md](QUICK_START.md) to get started.
 
-**Last Updated:** February 11, 2026  
+**Last Updated:** February 20, 2026  
 **Next Milestone:** End-to-end testing and user validation
