@@ -14,6 +14,34 @@ local https = require("ssl.https")
 local ltn12 = require("ltn12")
 local json = require("json")
 local md5 = require("ffi/sha2").md5
+local UIManager = require("ui/uimanager")
+-- Safe AsyncTask with fallback for older KOReader versions
+local AsyncTask
+do
+    local ok, mod = pcall(require, "ui/task")
+    if ok then
+        AsyncTask = mod
+    else
+        -- Fallback that works on all KOReader versions
+        AsyncTask = {
+            new = function(_, background_func, callback_func)
+                return {
+                    submit = function(self)
+                        UIManager:scheduleIn(0.01, function()
+                            local results = { pcall(background_func) }
+                            local ok = table.remove(results, 1)
+                            if callback_func then
+                                UIManager:nextTick(function()
+                                    callback_func(ok, table.unpack(results))
+                                end)
+                            end
+                        end)
+                    end
+                }
+            end
+        }
+    end
+end
 
 local APIClient = {
     server_url = nil,
@@ -35,7 +63,10 @@ local function redactUrls(message)
         message = tostring(message)
     end
     -- Match http:// or https:// URLs and replace them with [URL REDACTED]
-    return message:gsub("https?://[^%s]+", "[URL REDACTED]")
+    message = message:gsub("https?://[^%s]+", "[URL REDACTED]")
+    -- Task E: Extend redactUrls to also catch data: URLs
+    message = message:gsub("data:[^,%s]+base64,[^%s]+", "[DATA-URL REDACTED]")
+    return message
 end
 
 function APIClient:new(o)
@@ -332,55 +363,40 @@ Get book by hash
 @return boolean success
 @return table|string book_data or error_message
 --]]
-function APIClient:getBookByHash(book_hash)
+function APIClient:getBookByHash(book_hash, callback)
     self:logInfo("BookloreSync API: Looking up book by hash:", book_hash)
-    
-    local login_success, token = self:getOrRefreshBearerToken(self.username, self.password)
-    local headers = nil
-    if login_success then
-        headers = { ["Authorization"] = "Bearer " .. token }
-    end
 
-    local success, code, response = self:request("GET", "/api/v1/books/by-hash/" .. book_hash, nil, headers)
-    
-    -- Retry with fresh token if 401/403
-    if not success and (code == 401 or code == 403) and self.username and self.password then
-        self:logWarn("BookloreSync API: Token rejected, refreshing and retrying lookup")
-        if self.db then self.db:deleteBearerToken(self.username) end
-        local refresh_success, new_token = self:getOrRefreshBearerToken(self.username, self.password, true)
-        if refresh_success then
-            headers = { ["Authorization"] = "Bearer " .. new_token }
-            success, code, response = self:request("GET", "/api/v1/books/by-hash/" .. book_hash, nil, headers)
-        end
-    end
+    AsyncTask:new(function()
+        return self:request("GET", "/api/koreader/books/by-hash/" .. book_hash)
+    end, function(success, code, response)
+        if success and type(response) == "table" then
+            self:logInfo("BookloreSync API: Found book, ID:", response.id)
 
-    if success and type(response) == "table" then
-        self:logInfo("BookloreSync API: Found book, ID:", response.id)
-        
-        -- Extract ISBN from metadata if present
-        local isbn10 = nil
-        local isbn13 = nil
-        if response.metadata and type(response.metadata) == "table" then
-            isbn10 = response.metadata.isbn10
-            isbn13 = response.metadata.isbn13
-        end
-        
-        -- Store ISBN in top-level response for easier access by caller
-        response.isbn10 = isbn10
-        response.isbn13 = isbn13
-        
-        if isbn10 or isbn13 then
-            self:logInfo("BookloreSync API: Book has ISBN-10:", isbn10, "ISBN-13:", isbn13)
+            -- Extract ISBN from metadata if present
+            local isbn10 = nil
+            local isbn13 = nil
+            if response.metadata and type(response.metadata) == "table" then
+                isbn10 = response.metadata.isbn10
+                isbn13 = response.metadata.isbn13
+            end
+
+            -- Store ISBN in top-level response for easier access by caller
+            response.isbn10 = isbn10
+            response.isbn13 = isbn13
+
+            if isbn10 or isbn13 then
+                self:logInfo("BookloreSync API: Book has ISBN-10:", isbn10, "ISBN-13:", isbn13)
+            else
+                self:logInfo("BookloreSync API: Book has no ISBN data")
+            end
+
+            callback(true, response)
         else
-            self:logInfo("BookloreSync API: Book has no ISBN data")
+            local error_msg = response or "Book not found"
+            self:logWarn("BookloreSync API: Book lookup failed:", error_msg)
+            callback(false, error_msg)
         end
-        
-        return true, response
-    else
-        local error_msg = response or "Book not found"
-        self:logWarn("BookloreSync API: Book lookup failed:", error_msg)
-        return false, error_msg
-    end
+    end):submit()
 end
 
 --[[--
@@ -390,39 +406,41 @@ Submit reading session
 @return boolean success
 @return string message (success or error message)
 --]]
-function APIClient:submitSession(session_data)
+function APIClient:submitSession(session_data, callback)
     self:logInfo("BookloreSync API: Submitting reading session for book:", session_data.bookId or session_data.bookHash)
-    
-    local login_success, token = self:getOrRefreshBearerToken(self.username, self.password)
-    local headers = nil
-    if login_success then
-        headers = { ["Authorization"] = "Bearer " .. token }
-    end
 
-    local success, code, response = self:request("POST", "/api/v1/reading-sessions", session_data, headers)
-    
-    -- Retry with fresh token if 401/403
-    if not success and (code == 401 or code == 403) and self.username and self.password then
-        self:logWarn("BookloreSync API: Token rejected, refreshing and retrying submission")
-        if self.db then self.db:deleteBearerToken(self.username) end
-        local refresh_success, new_token = self:getOrRefreshBearerToken(self.username, self.password, true)
-        if refresh_success then
-            headers = { ["Authorization"] = "Bearer " .. new_token }
-            success, code, response = self:request("POST", "/api/v1/reading-sessions", session_data, headers)
+    AsyncTask:new(function()
+        local login_success, token = self:getOrRefreshBearerToken(self.username, self.password)
+        local headers = nil
+        if login_success then
+            headers = { ["Authorization"] = "Bearer " .. token }
         end
-    end
 
-    if success then
-        self:logInfo("BookloreSync API: Session submitted successfully")
-        return true, "Session synced successfully", code
-    else
-        local error_msg = response or "Failed to submit session"
-        if code then
-            error_msg = "HTTP " .. tostring(code) .. ": " .. error_msg
+        local success, code, response = self:request("POST", "/api/v1/reading-sessions", session_data, headers)
+        
+        -- Retry with fresh token if 401/403
+        if not success and (code == 401 or code == 403) and self.username and self.password then
+            self:logWarn("BookloreSync API: Token rejected, refreshing and retrying submission")
+            if self.db then self.db:deleteBearerToken(self.username) end
+            local refresh_success, new_token = self:getOrRefreshBearerToken(self.username, self.password, true)
+            if refresh_success then
+                headers = { ["Authorization"] = "Bearer " .. new_token }
+                success, code, response = self:request("POST", "/api/v1/reading-sessions", session_data, headers)
+            end
         end
-        self:logWarn("BookloreSync API: Session submission failed:", error_msg)
-        return false, error_msg, code
-    end
+
+        if success then
+            self:logInfo("BookloreSync API: Session submitted successfully")
+            return true, "Session synced successfully", code
+        else
+            local error_msg = response or "Failed to submit session"
+            if code then
+                error_msg = "HTTP " .. tostring(code) .. ": " .. error_msg
+            end
+            self:logWarn("BookloreSync API: Session submission failed:", error_msg)
+            return false, error_msg, code
+        end
+    end, callback):submit()
 end
 
 --[[--
@@ -550,6 +568,17 @@ function APIClient:loginBooklore(username, password)
     else
         local error_msg = response or "Login failed"
         
+        -- Task C: Improve user feedback when bearer token refresh / login fails
+        local UIManager = require("ui/uimanager")
+        local InfoMessage = require("ui/widget/infomessage")
+        local _ = require("gettext")
+        if string.find(tostring(code), "0") or code == nil then
+             UIManager:show(InfoMessage:new{
+                 text = _("Cannot connect to Booklore server.\nCheck URL, internet, or server status."),
+                 timeout = 5,
+             })
+        end
+
         -- Check for duplicate token error (server-side bug)
         if type(error_msg) == "string" and error_msg:find("Duplicate entry") and error_msg:find("uq_refresh_token") then
             self:logWarn("BookloreSync API: Duplicate refresh token error (server-side bug)")
@@ -967,6 +996,115 @@ function APIClient:getBooksInShelf(shelf_id, username, password)
     local error_msg = response or "Could not retrieve books from shelf"
     self:logWarn("BookloreSync API: Failed to get books in shelf:", error_msg)
     return false, error_msg
+end
+
+--[[--
+Get all shelves for the authenticated user
+
+@param username Booklore username
+@param password Booklore password
+@return boolean success
+@return table|string shelves array or error message
+--]]
+function APIClient:getShelves(username, password)
+    self:logInfo("BookloreSync API: Getting shelves for user:", username)
+
+    local login_success, token = self:getOrRefreshBearerToken(username, password)
+    if not login_success then
+        self:logErr("BookloreSync API: Failed to get Bearer token:", token)
+        return false, token
+    end
+
+    local headers = { ["Authorization"] = "Bearer " .. token }
+    local success, code, response = self:request("GET", "/api/v1/shelves", nil, headers)
+
+    if success and type(response) == "table" then
+        self:logInfo("BookloreSync API: Found", #response, "shelves")
+        return true, response
+    end
+
+    local error_msg = response or "Could not retrieve shelves"
+    self:logWarn("BookloreSync API: Failed to get shelves:", error_msg)
+    return false, error_msg
+end
+
+--[[--
+Get or create a shelf by name
+
+Searches for an existing shelf with the given name (case-insensitive).
+If not found, creates a new shelf with that name.
+
+@param name Shelf name to search for or create
+@param username Booklore username
+@param password Booklore password
+@return boolean success
+@return number|string shelf_id or error message
+--]]
+function APIClient:getOrCreateShelf(name, username, password)
+    local ok, success_or_err, shelf_id_or_msg = pcall(function()
+        self:logInfo("BookloreSync API: Getting or creating shelf:", name)
+
+        -- Get Bearer token
+        local login_success, token = self:getOrRefreshBearerToken(username, password)
+        if not login_success then
+            self:logErr("BookloreSync API: Failed to get Bearer token:", token)
+            return false, token
+        end
+
+        -- Get all shelves
+        local headers = { ["Authorization"] = "Bearer " .. token }
+        local success, code, response = self:request("GET", "/api/v1/shelves", nil, headers)
+
+        if not success or type(response) ~= "table" then
+            local error_msg = response or "Could not retrieve shelves"
+            self:logWarn("BookloreSync API: Failed to get shelves:", error_msg)
+            return false, error_msg
+        end
+
+        self:logInfo("BookloreSync API: Found", #response, "shelves")
+
+        -- Search for shelf by name (case-insensitive)
+        local name_lower = name:lower()
+        for _, shelf in ipairs(response) do
+            if shelf.name and shelf.name:lower() == name_lower then
+                self:logInfo("BookloreSync API: Found existing shelf:", shelf.name, "ID:", shelf.id)
+                return true, tonumber(shelf.id)
+            end
+        end
+
+        -- Shelf not found, create it
+        self:logInfo("BookloreSync API: Shelf not found, creating:", name)
+
+        local create_body = json.encode({
+            name = name,
+            icon = "📚",
+            iconType = "PRIME_NG"
+        })
+
+        local create_headers = {
+            ["Authorization"] = "Bearer " .. token,
+            ["Content-Type"] = "application/json"
+        }
+
+        local create_success, create_code, create_response = self:request("POST", "/api/v1/shelves", create_body, create_headers)
+
+        if create_success and create_code == 201 and type(create_response) == "table" and create_response.id then
+            local new_shelf_id = tonumber(create_response.id)
+            self:logInfo("BookloreSync API: Created shelf:", name, "ID:", new_shelf_id)
+            return true, new_shelf_id
+        else
+            local error_msg = create_response or "Failed to create shelf"
+            self:logWarn("BookloreSync API: Shelf creation failed:", error_msg)
+            return false, error_msg
+        end
+    end)
+
+    if not ok then
+        self:logErr("BookloreSync API: Unexpected error in getOrCreateShelf:", tostring(success_or_err))
+        return false, tostring(success_or_err)
+    end
+
+    return success_or_err, shelf_id_or_msg
 end
 
 --[[--

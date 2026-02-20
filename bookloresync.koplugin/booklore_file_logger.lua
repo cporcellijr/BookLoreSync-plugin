@@ -15,6 +15,9 @@ local FileLogger = {
     current_log_file = nil,
     current_date = nil,
     max_files = 3,
+    max_size = 1048576, -- 1MB
+    buffer = {},
+    buffer_limit = 20,
 }
 
 function FileLogger:new(o)
@@ -137,8 +140,25 @@ function FileLogger:write(level, ...)
         
         self.current_date = current_date
         
+        -- Flush any remaining buffered logs before rotating
+        self:flushBuffer()
+        
         -- Rotate old logs
         self:rotateLogs()
+    end
+    
+    -- Check if current file exceeds size limit
+    if self.current_log_file then
+        local current_size = self:getCurrentLogSize()
+        if current_size >= self.max_size then
+            logger.info("BookloreSync FileLogger: File size limit reached (" .. current_size .. "), rotating")
+            self:flushBuffer()
+            if self.current_log_file then
+                self.current_log_file:close()
+                self.current_log_file = nil
+            end
+            self:rotateLogs()
+        end
     end
     
     -- Open log file if not already open
@@ -168,11 +188,30 @@ function FileLogger:write(level, ...)
     local message = table.concat(message_parts, " ")
     local log_entry = string.format("[%s] [%s] %s\n", timestamp, level, message)
     
-    -- Write to file
-    self.current_log_file:write(log_entry)
-    self.current_log_file:flush()
+    -- Write to buffer
+    table.insert(self.buffer, log_entry)
+    
+    -- Flush if buffer limit reached
+    if #self.buffer >= self.buffer_limit then
+        self:flushBuffer()
+    end
     
     return true
+end
+
+--[[--
+Flush the log buffer to disk
+--]]
+function FileLogger:flushBuffer()
+    if not self.current_log_file or #self.buffer == 0 then
+        return
+    end
+    
+    for _, entry in ipairs(self.buffer) do
+        self.current_log_file:write(entry)
+    end
+    self.current_log_file:flush()
+    self.buffer = {}
 end
 
 --[[--
@@ -182,6 +221,7 @@ Should be called when the plugin is exiting.
 --]]
 function FileLogger:close()
     if self.current_log_file then
+        self:flushBuffer()
         self.current_log_file:close()
         self.current_log_file = nil
         logger.info("BookloreSync FileLogger: Closed log file")
