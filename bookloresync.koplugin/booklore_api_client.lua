@@ -573,12 +573,14 @@ function APIClient:loginBooklore(username, password)
         local InfoMessage = require("ui/widget/infomessage")
         local _ = require("gettext")
         if string.find(tostring(code), "0") or code == nil then
-             UIManager:show(InfoMessage:new{
-                 text = _("Cannot connect to Booklore server.\nCheck URL, internet, or server status."),
-                 timeout = 5,
-             })
+             UIManager:scheduleIn(0, function()
+                 UIManager:show(InfoMessage:new{
+                     text = _("Cannot connect to Booklore server.\nCheck URL, internet, or server status."),
+                     timeout = 5,
+                 })
+             end)
         end
-
+        
         -- Check for duplicate token error (server-side bug)
         if type(error_msg) == "string" and error_msg:find("Duplicate entry") and error_msg:find("uq_refresh_token") then
             self:logWarn("BookloreSync API: Duplicate refresh token error (server-side bug)")
@@ -981,6 +983,16 @@ function APIClient:getBooksInShelf(shelf_id, username, password)
     -- Standard Booklore endpoint: GET /api/v1/shelves/{shelfId}/books
     local success, code, response = self:request("GET", "/api/v1/shelves/" .. shelf_id .. "/books", nil, headers)
 
+    if not success and (code == 401 or code == 403) and username and password then
+        self:logWarn("BookloreSync API: Token rejected, refreshing and retrying getBooksInShelf")
+        if self.db then self.db:deleteBearerToken(username) end
+        local refresh_success, new_token = self:getOrRefreshBearerToken(username, password, true)
+        if refresh_success then
+            headers["Authorization"] = "Bearer " .. new_token
+            success, code, response = self:request("GET", "/api/v1/shelves/" .. shelf_id .. "/books", nil, headers)
+        end
+    end
+
     if success and type(response) == "table" then
         self:logInfo("BookloreSync API: Found", #response, "books in shelf")
 
@@ -1054,6 +1066,16 @@ function APIClient:getOrCreateShelf(name, username, password)
         -- Get all shelves
         local headers = { ["Authorization"] = "Bearer " .. token }
         local success, code, response = self:request("GET", "/api/v1/shelves", nil, headers)
+
+        if not success and (code == 401 or code == 403) and username and password then
+            self:logWarn("BookloreSync API: Token rejected, refreshing and retrying getOrCreateShelf")
+            if self.db then self.db:deleteBearerToken(username) end
+            local refresh_success, new_token = self:getOrRefreshBearerToken(username, password, true)
+            if refresh_success then
+                headers["Authorization"] = "Bearer " .. new_token
+                success, code, response = self:request("GET", "/api/v1/shelves", nil, headers)
+            end
+        end
 
         if not success or type(response) ~= "table" then
             local error_msg = response or "Could not retrieve shelves"
@@ -1160,6 +1182,23 @@ function APIClient:downloadBook(book_id, save_path, username, password)
     http_client.TIMEOUT = self.timeout
 
     local res, code, response_headers = http_client.request(req_args)
+
+    if type(code) == "number" and (code == 401 or code == 403) and username and password then
+        self:logWarn("BookloreSync API: Token rejected, refreshing and retrying downloadBook")
+        if self.db then self.db:deleteBearerToken(username) end
+        local refresh_success, new_token = self:getOrRefreshBearerToken(username, password, true)
+        if refresh_success then
+            headers["Authorization"] = "Bearer " .. new_token
+            req_args.headers = headers
+            -- Re-open file and sink because they might be in a bad state
+            if file then file:close() end
+            file, err = io.open(save_path, "wb")
+            if file then
+                req_args.sink = ltn12.sink.file(file)
+                res, code, response_headers = http_client.request(req_args)
+            end
+        end
+    end
 
     if not code then
         local error_msg = res or "Connection failed"

@@ -29,15 +29,18 @@
 - [x] Implement SQLite transaction wrapping for bulk operations
 - [x] Optimize File Logger I/O with persistent file handle
 - [x] Ensure proper lifecycle management for database and logger
+- [x] Implement Beta Fixes (Token Recovery, Safe UI Dispatch, Background Sync)
 
 ## 3. CRITICAL FILE MAP
 
 - `bookloresync.koplugin/main.lua`
 - `bookloresync.koplugin/booklore_database.lua`
 - `bookloresync.koplugin/booklore_file_logger.lua`
+- `bookloresync.koplugin/booklore_api_client.lua`
 
 ## 4. CHANGE LOG (Newest Top)
 
+- **2026-02-20**: [Antigravity] Implemented safe UI dispatch in loginBooklore, 401/403 token recovery in API endpoints, and non-blocking background sync. Tested changes successfully.
 - **2026-02-20**: Implemented SQLite transaction wrapping and File Logger I/O optimization.
 - **2026-02-20**: Added MD5 hash caching bypass and dynamic UI updates in `main.lua`.
 - **2026-02-20**: Initialized branch with Deep Dive and implementation plan.

@@ -614,7 +614,9 @@ function BookloreSync:_detectDefaultDownloadDir()
     end
 end
 
-function BookloreSync:syncFromBookloreShelf()
+function BookloreSync:syncFromBookloreShelf(silent)
+    if silent == nil then silent = (self.ui and self.ui.document and true or false) end
+
     -- Task 1: Check if a sync is already in progress
     if self.sync_in_progress then
         self:logWarn("BookloreSync: Sync already in progress, skipping duplicate call")
@@ -624,19 +626,24 @@ function BookloreSync:syncFromBookloreShelf()
     -- Check if Booklore credentials are configured
     if not self.booklore_username or self.booklore_username == "" or
        not self.booklore_password or self.booklore_password == "" then
-        UIManager:show(InfoMessage:new{
-            text = _("Booklore credentials not configured. Please configure your Booklore account first."),
-            timeout = 3,
-        })
+        if not silent and not self.silent_messages then
+            UIManager:show(InfoMessage:new{
+                text = _("Booklore credentials not configured. Please configure your Booklore account first."),
+                timeout = 3,
+            })
+        end
         return false, _("Credentials not configured")
     end
 
     self.sync_in_progress = true
-    local info_msg = InfoMessage:new{
-        text = _("Syncing books from Booklore shelf..."),
-        timeout = 0,
-    }
-    UIManager:show(info_msg)
+    local info_msg
+    if not silent and not self.silent_messages then
+        info_msg = InfoMessage:new{
+            text = _("Syncing books from Booklore shelf..."),
+            timeout = 0,
+        }
+        UIManager:show(info_msg)
+    end
 
     self:logInfo("BookloreSync: syncFromBookloreShelf — starting AsyncTask sync")
 
@@ -758,13 +765,15 @@ function BookloreSync:syncFromBookloreShelf()
     end,
     function(success, result_ok, result)
         -- Callback on UI thread
-        UIManager:close(info_msg)
+        if info_msg then UIManager:close(info_msg) end
         self.sync_in_progress = false
 
         local final_success = success and result_ok
         local final_msg = final_success and result or (T(_("Sync failed: %1"), result or "Unknown error"))
         
-        UIManager:show(InfoMessage:new{ text = final_msg, timeout = 5 })
+        if not silent and not self.silent_messages then
+            UIManager:show(InfoMessage:new{ text = final_msg, timeout = 5 })
+        end
         
         if final_success then
             local FileManager = require("apps/filemanager/filemanager")
@@ -2213,7 +2222,7 @@ function BookloreSync:onResume()
 end
 
 function BookloreSync:syncPendingSessions(silent)
-    silent = silent or false
+    if silent == nil then silent = (self.ui and self.ui.document and true or false) end
     
     if self.sync_in_progress then
         self:logWarn("BookloreSync: Sync already in progress, skipping pending sessions sync")
@@ -2242,12 +2251,6 @@ function BookloreSync:syncPendingSessions(silent)
         UIManager:show(info_msg)
     end
     
-    local info_msg = InfoMessage:new{
-        text = _("Syncing pending sessions..."),
-        timeout = 0,
-    }
-    UIManager:show(info_msg)
-    
     AsyncTask:new(function()
         -- Update API client with current credentials
         self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
@@ -2258,7 +2261,7 @@ function BookloreSync:syncPendingSessions(silent)
         
         local function syncSession(i)
             if i > #sessions then
-                UIManager:close(info_msg)
+                if info_msg then UIManager:close(info_msg) end
                 self.sync_in_progress = false
                 if not silent and not self.silent_messages then
                     local message = ""
@@ -2358,7 +2361,7 @@ Skips items with retry_count > 10 to prevent infinite accumulation.
 @param silent boolean Don't show UI messages if true
 --]]
 function BookloreSync:syncPendingDeletions(silent)
-    silent = silent or false
+    if silent == nil then silent = (self.ui and self.ui.document and true or false) end
     
     if self.sync_in_progress then
         self:logWarn("BookloreSync: Sync already in progress, skipping pending deletions sync")
@@ -2464,7 +2467,7 @@ Queries the server for books cached while offline
 @param silent boolean Don't show UI messages if true
 --]]
 function BookloreSync:resolveUnmatchedBooks(silent)
-    silent = silent or false
+    if silent == nil then silent = (self.ui and self.ui.document and true or false) end
     
     if self.sync_in_progress then
         self:logWarn("BookloreSync: Sync already in progress, skipping resolveUnmatchedBooks")
