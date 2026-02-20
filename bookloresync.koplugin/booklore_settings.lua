@@ -389,46 +389,76 @@ function Settings:pickShelfFromServer(parent)
 end
 
 function Settings:configureDownloadDir(parent)
-    local input_dialog
-    input_dialog = InputDialog:new{
-        title = _("Download Directory"),
-        input = parent.download_dir,
-        input_hint = "/mnt/onboard/Books",
-        buttons = {
-            {
+    -- Try to use FileChooser for folder selection
+    local ok, FileChooser = pcall(require, "ui/widget/filechooser")
+
+    if ok and FileChooser then
+        -- Use native folder picker
+        local start_path = parent.download_dir
+        if not start_path or start_path == "" then
+            start_path = "/mnt/onboard"
+        end
+
+        local file_chooser = FileChooser:new{
+            title = _("Select Download Directory"),
+            path = start_path,
+            select_directory = true,
+            select_file = false,
+            detailed_list = true,
+            onConfirm = function(path)
+                parent.download_dir = path
+                parent.settings:saveSetting("download_dir", parent.download_dir)
+                parent.settings:flush()
+                UIManager:show(InfoMessage:new{
+                    text = T(_("Download directory set to:\n%1"), parent.download_dir),
+                    timeout = 2,
+                })
+            end,
+        }
+        UIManager:show(file_chooser)
+    else
+        -- Fallback to text input if FileChooser is not available
+        local input_dialog
+        input_dialog = InputDialog:new{
+            title = _("Download Directory"),
+            input = parent.download_dir,
+            input_hint = "/mnt/onboard/Books",
+            buttons = {
                 {
-                    text = _("Cancel"),
-                    callback = function()
-                        UIManager:close(input_dialog)
-                    end,
-                },
-                {
-                    text = _("Save"),
-                    is_enter_default = true,
-                    callback = function()
-                        local value = input_dialog:getInputText()
-                        if value and value ~= "" then
-                            parent.download_dir = value
-                            parent.settings:saveSetting("download_dir", parent.download_dir)
-                            parent.settings:flush()
+                    {
+                        text = _("Cancel"),
+                        callback = function()
                             UIManager:close(input_dialog)
-                            UIManager:show(InfoMessage:new{
-                                text = T(_("Download directory set to:\n%1"), parent.download_dir),
-                                timeout = 2,
-                            })
-                        else
-                            UIManager:show(InfoMessage:new{
-                                text = _("Please enter a valid directory path"),
-                                timeout = 2,
-                            })
-                        end
-                    end,
+                        end,
+                    },
+                    {
+                        text = _("Save"),
+                        is_enter_default = true,
+                        callback = function()
+                            local value = input_dialog:getInputText()
+                            if value and value ~= "" then
+                                parent.download_dir = value
+                                parent.settings:saveSetting("download_dir", parent.download_dir)
+                                parent.settings:flush()
+                                UIManager:close(input_dialog)
+                                UIManager:show(InfoMessage:new{
+                                    text = T(_("Download directory set to:\n%1"), parent.download_dir),
+                                    timeout = 2,
+                                })
+                            else
+                                UIManager:show(InfoMessage:new{
+                                    text = _("Please enter a valid directory path"),
+                                    timeout = 2,
+                                })
+                            end
+                        end,
+                    },
                 },
             },
-        },
-    }
-    UIManager:show(input_dialog)
-    input_dialog:onShowKeyboard()
+        }
+        UIManager:show(input_dialog)
+        input_dialog:onShowKeyboard()
+    end
 end
 
 function Settings:buildConnectionMenu(parent)
@@ -485,6 +515,23 @@ function Settings:buildConnectionMenu(parent)
                 keep_menu_open = true,
                 callback = function()
                     self:configureDownloadDir(parent)
+                end,
+            },
+            {
+                text = _("Open Download Folder"),
+                help_text = _("Open the download directory in File Manager to browse your synced books."),
+                enabled_func = function()
+                    if not parent.download_dir or parent.download_dir == "" then
+                        return false
+                    end
+                    local lfs = require("libs/libkoreader-lfs")
+                    return lfs.attributes(parent.download_dir, "mode") == "directory"
+                end,
+                callback = function()
+                    local FileManager = require("apps/filemanager/filemanager")
+                    if FileManager.instance then
+                        FileManager.instance:reinit(parent.download_dir)
+                    end
                 end,
             },
             {

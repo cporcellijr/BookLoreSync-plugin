@@ -334,29 +334,12 @@ Get book by hash
 --]]
 function APIClient:getBookByHash(book_hash)
     self:logInfo("BookloreSync API: Looking up book by hash:", book_hash)
-    
-    local login_success, token = self:getOrRefreshBearerToken(self.username, self.password)
-    local headers = nil
-    if login_success then
-        headers = { ["Authorization"] = "Bearer " .. token }
-    end
 
-    local success, code, response = self:request("GET", "/api/v1/books/by-hash/" .. book_hash, nil, headers)
-    
-    -- Retry with fresh token if 401/403
-    if not success and (code == 401 or code == 403) and self.username and self.password then
-        self:logWarn("BookloreSync API: Token rejected, refreshing and retrying lookup")
-        if self.db then self.db:deleteBearerToken(self.username) end
-        local refresh_success, new_token = self:getOrRefreshBearerToken(self.username, self.password, true)
-        if refresh_success then
-            headers = { ["Authorization"] = "Bearer " .. new_token }
-            success, code, response = self:request("GET", "/api/v1/books/by-hash/" .. book_hash, nil, headers)
-        end
-    end
+    local success, code, response = self:request("GET", "/api/koreader/books/by-hash/" .. book_hash)
 
     if success and type(response) == "table" then
         self:logInfo("BookloreSync API: Found book, ID:", response.id)
-        
+
         -- Extract ISBN from metadata if present
         local isbn10 = nil
         local isbn13 = nil
@@ -364,17 +347,17 @@ function APIClient:getBookByHash(book_hash)
             isbn10 = response.metadata.isbn10
             isbn13 = response.metadata.isbn13
         end
-        
+
         -- Store ISBN in top-level response for easier access by caller
         response.isbn10 = isbn10
         response.isbn13 = isbn13
-        
+
         if isbn10 or isbn13 then
             self:logInfo("BookloreSync API: Book has ISBN-10:", isbn10, "ISBN-13:", isbn13)
         else
             self:logInfo("BookloreSync API: Book has no ISBN data")
         end
-        
+
         return true, response
     else
         local error_msg = response or "Book not found"
@@ -997,6 +980,85 @@ function APIClient:getShelves(username, password)
     local error_msg = response or "Could not retrieve shelves"
     self:logWarn("BookloreSync API: Failed to get shelves:", error_msg)
     return false, error_msg
+end
+
+--[[--
+Get or create a shelf by name
+
+Searches for an existing shelf with the given name (case-insensitive).
+If not found, creates a new shelf with that name.
+
+@param name Shelf name to search for or create
+@param username Booklore username
+@param password Booklore password
+@return boolean success
+@return number|string shelf_id or error message
+--]]
+function APIClient:getOrCreateShelf(name, username, password)
+    local ok, success_or_err, shelf_id_or_msg = pcall(function()
+        self:logInfo("BookloreSync API: Getting or creating shelf:", name)
+
+        -- Get Bearer token
+        local login_success, token = self:getOrRefreshBearerToken(username, password)
+        if not login_success then
+            self:logErr("BookloreSync API: Failed to get Bearer token:", token)
+            return false, token
+        end
+
+        -- Get all shelves
+        local headers = { ["Authorization"] = "Bearer " .. token }
+        local success, code, response = self:request("GET", "/api/v1/shelves", nil, headers)
+
+        if not success or type(response) ~= "table" then
+            local error_msg = response or "Could not retrieve shelves"
+            self:logWarn("BookloreSync API: Failed to get shelves:", error_msg)
+            return false, error_msg
+        end
+
+        self:logInfo("BookloreSync API: Found", #response, "shelves")
+
+        -- Search for shelf by name (case-insensitive)
+        local name_lower = name:lower()
+        for _, shelf in ipairs(response) do
+            if shelf.name and shelf.name:lower() == name_lower then
+                self:logInfo("BookloreSync API: Found existing shelf:", shelf.name, "ID:", shelf.id)
+                return true, tonumber(shelf.id)
+            end
+        end
+
+        -- Shelf not found, create it
+        self:logInfo("BookloreSync API: Shelf not found, creating:", name)
+
+        local create_body = json.encode({
+            name = name,
+            icon = "📚",
+            iconType = "PRIME_NG"
+        })
+
+        local create_headers = {
+            ["Authorization"] = "Bearer " .. token,
+            ["Content-Type"] = "application/json"
+        }
+
+        local create_success, create_code, create_response = self:request("POST", "/api/v1/shelves", create_body, create_headers)
+
+        if create_success and create_code == 201 and type(create_response) == "table" and create_response.id then
+            local new_shelf_id = tonumber(create_response.id)
+            self:logInfo("BookloreSync API: Created shelf:", name, "ID:", new_shelf_id)
+            return true, new_shelf_id
+        else
+            local error_msg = create_response or "Failed to create shelf"
+            self:logWarn("BookloreSync API: Shelf creation failed:", error_msg)
+            return false, error_msg
+        end
+    end)
+
+    if not ok then
+        self:logErr("BookloreSync API: Unexpected error in getOrCreateShelf:", tostring(success_or_err))
+        return false, tostring(success_or_err)
+    end
+
+    return success_or_err, shelf_id_or_msg
 end
 
 --[[--

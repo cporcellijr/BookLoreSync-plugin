@@ -11,7 +11,7 @@ local DataStorage = require("datastorage")
 local logger = require("logger")
 
 local Database = {
-    VERSION = 8,  -- Current database schema version
+    VERSION = 9,  -- Current database schema version
     db_path = nil,
     conn = nil,
 }
@@ -218,6 +218,26 @@ Database.migrations = {
                 value TEXT NOT NULL,
                 cached_at INTEGER NOT NULL
             )
+        ]],
+    },
+
+    -- Migration 9: Add pending_deletions table for offline shelf removal queue
+    [9] = {
+        -- Create pending_deletions table
+        [[
+            CREATE TABLE IF NOT EXISTS pending_deletions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_hash TEXT NOT NULL,
+                stem TEXT NOT NULL,
+                book_id INTEGER,
+                retry_count INTEGER DEFAULT 0,
+                created_at INTEGER DEFAULT (strftime('%s', 'now'))
+            )
+        ]],
+        -- Create index on file_hash for duplicate detection
+        [[
+            CREATE INDEX IF NOT EXISTS idx_pending_deletions_file_hash
+            ON pending_deletions(file_hash)
         ]],
     },
 }
@@ -1692,16 +1712,149 @@ Clear all cached updater data
 --]]
 function Database:clearUpdaterCache()
     local stmt = self.conn:prepare("DELETE FROM updater_cache")
-    
+
     if not stmt then
         logger.err("BookloreSync Database: Failed to prepare statement:", self.conn:errmsg())
         return false
     end
-    
+
     stmt:step()
     stmt:close()
-    
+
     logger.info("BookloreSync Database: Cleared updater cache")
+    return true
+end
+
+-- Pending Deletions operations
+
+--[[--
+Save a pending deletion to the queue
+
+Uses INSERT OR IGNORE to skip duplicates based on file_hash index.
+
+@param file_hash MD5 hash of the deleted file
+@param stem Filename stem (no extension)
+@param book_id Booklore book ID (optional, may be nil)
+@return boolean success
+--]]
+function Database:savePendingDeletion(file_hash, stem, book_id)
+    -- Ensure types are correct
+    file_hash = tostring(file_hash or "")
+    stem = tostring(stem or "")
+
+    if file_hash == "" then
+        logger.warn("BookloreSync Database: Cannot save pending deletion with empty file_hash")
+        return false
+    end
+
+    -- book_id can be nil or must be a number
+    if book_id ~= nil then
+        book_id = tonumber(book_id)
+        if not book_id then
+            logger.warn("BookloreSync Database: Invalid book_id in savePendingDeletion, setting to NULL")
+            book_id = nil
+        end
+    end
+
+    local stmt = self.conn:prepare([[
+        INSERT OR IGNORE INTO pending_deletions (file_hash, stem, book_id)
+        VALUES (?, ?, ?)
+    ]])
+
+    if not stmt then
+        logger.err("BookloreSync Database: Failed to prepare statement:", self.conn:errmsg())
+        return false
+    end
+
+    stmt:bind(file_hash, stem, book_id)
+
+    local result = stmt:step()
+    stmt:close()
+
+    if result ~= SQ3.DONE and result ~= SQ3.OK then
+        logger.err("BookloreSync Database: Failed to insert pending deletion:", self.conn:errmsg())
+        return false
+    end
+
+    logger.info("BookloreSync Database: Saved pending deletion for hash:", file_hash)
+    return true
+end
+
+--[[--
+Get all pending deletions from the queue
+
+@return table Array of deletion records with id, file_hash, stem, book_id, retry_count fields
+--]]
+function Database:getPendingDeletions()
+    local stmt = self.conn:prepare([[
+        SELECT id, file_hash, stem, book_id, retry_count
+        FROM pending_deletions
+        ORDER BY created_at ASC
+    ]])
+
+    if not stmt then
+        logger.err("BookloreSync Database: Failed to prepare statement:", self.conn:errmsg())
+        return {}
+    end
+
+    local deletions = {}
+    for row in stmt:rows() do
+        table.insert(deletions, {
+            id = tonumber(row[1]),
+            file_hash = tostring(row[2]),
+            stem = tostring(row[3]),
+            book_id = row[4] and tonumber(row[4]) or nil,
+            retry_count = tonumber(row[5]) or 0,
+        })
+    end
+
+    stmt:close()
+    return deletions
+end
+
+--[[--
+Remove a pending deletion from the queue
+
+@param deletion_id ID of the deletion record to remove
+@return boolean success
+--]]
+function Database:removePendingDeletion(deletion_id)
+    local stmt = self.conn:prepare("DELETE FROM pending_deletions WHERE id = ?")
+
+    if not stmt then
+        logger.err("BookloreSync Database: Failed to prepare statement:", self.conn:errmsg())
+        return false
+    end
+
+    stmt:bind(deletion_id)
+    stmt:step()
+    stmt:close()
+
+    return true
+end
+
+--[[--
+Increment retry count for a pending deletion
+
+@param deletion_id ID of the deletion record to update
+@return boolean success
+--]]
+function Database:incrementDeletionRetry(deletion_id)
+    local stmt = self.conn:prepare([[
+        UPDATE pending_deletions
+        SET retry_count = retry_count + 1
+        WHERE id = ?
+    ]])
+
+    if not stmt then
+        logger.err("BookloreSync Database: Failed to prepare statement:", self.conn:errmsg())
+        return false
+    end
+
+    stmt:bind(deletion_id)
+    stmt:step()
+    stmt:close()
+
     return true
 end
 
