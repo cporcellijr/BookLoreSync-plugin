@@ -681,8 +681,11 @@ function BookloreSync:syncFromBookloreShelf()
 
                     if lfs.attributes(filepath, "mode") == "file" then
                         -- Update cache if needed
-                        local hash = self:calculateBookHash(filepath)
-                        self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
+                        local existing_book = self.db:getBookByFilePath(filepath)
+                        if not existing_book then
+                            local hash = self:calculateBookHash(filepath)
+                            self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
+                        end
                         skipped = skipped + 1
                     else
                         -- Download

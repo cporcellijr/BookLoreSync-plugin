@@ -444,6 +444,7 @@ SELECT * FROM pending_sessions;
 - ✅ **Atomic Operations** - INSERT OR REPLACE for data consistency
 - ✅ **Better Error Handling** - Enhanced API error extraction
 - ✅ **No Module Conflicts** - All modules prefixed with "booklore_"
+- ✅ **Optimized Sync Speed** - Bypasses MD5 hashing for books already in local cache
 
 ### New Features
 

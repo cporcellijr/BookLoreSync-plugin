@@ -27,8 +27,9 @@
 - [x] Initial Deep Dive & Planning
 - [x] Implement UI updates in `syncFromBookloreShelf()`
 - [x] Implement UI updates in `scanLibrary()`
+- [x] Add cache bypass check before calculating MD5 hash in `syncFromBookloreShelf()`
 - [x] Run Lua syntax tests
-- [x] Context: Add dynamic progress text to avoid the appearance of the plugin hanging.
+- [x] Context: Add dynamic progress text to avoid the appearance of the plugin hanging and optimize performance by skipping hashing for cached books.
 
 ## 3. CRITICAL FILE MAP
 
@@ -38,6 +39,7 @@
 
 ## 4. CHANGE LOG (Newest Top)
 
+- **2026-02-20**: Added MD5 hash caching bypass in `syncFromBookloreShelf()` algorithm to optimize sync speed for existing local books. Tested and verified script syntax functionality.
 - **2026-02-20**: Finalized dynamic UI progress tracking updates testing.
 - **2026-02-20**: Implemented safe UI thread updates (`UIManager:scheduleIn`) during AsyncTask loops in `main.lua` (`syncFromBookloreShelf()` and `scanLibrary()`).
 - **2026-02-20**: Initialized branch with Deep Dive and implementation plan.
