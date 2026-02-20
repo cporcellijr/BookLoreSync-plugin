@@ -22,18 +22,21 @@ do
     if ok then
         AsyncTask = mod
     else
-        -- Fallback: schedule on UI thread
+        -- Fallback that works on all KOReader versions
         AsyncTask = {
             new = function(_, background_func, callback_func)
-                UIManager:scheduleIn(0.01, function()
-                    local ok, result = pcall(background_func)
-                    if callback_func then
-                        UIManager:nextTick(function()
-                            callback_func(ok, result)
+                return {
+                    submit = function(self)
+                        UIManager:scheduleIn(0.01, function()
+                            local ok, result = pcall(background_func)
+                            if callback_func then
+                                UIManager:nextTick(function()
+                                    callback_func(ok, result)
+                                end)
+                            end
                         end)
                     end
-                end)
-                return {}
+                }
             end
         }
     end
@@ -392,7 +395,7 @@ function APIClient:getBookByHash(book_hash, callback)
             self:logWarn("BookloreSync API: Book lookup failed:", error_msg)
             callback(false, error_msg)
         end
-    end)
+    end):submit()
 end
 
 --[[--
@@ -436,7 +439,7 @@ function APIClient:submitSession(session_data, callback)
             self:logWarn("BookloreSync API: Session submission failed:", error_msg)
             return false, error_msg, code
         end
-    end, callback)
+    end, callback):submit()
 end
 
 --[[--
