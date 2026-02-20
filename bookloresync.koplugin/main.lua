@@ -28,7 +28,7 @@ local _ = require("gettext")
 local T = require("ffi/util").template
 
 local BookloreSync = WidgetContainer:extend{
-    name = "bookloresync",
+    name = "booklore",
     is_doc_only = false,
 }
 
@@ -2149,30 +2149,76 @@ function BookloreSync:syncPendingSessions(silent)
         UIManager:show(info_msg)
     end
     
+    local info_msg = InfoMessage:new{
+        text = _("Syncing pending sessions..."),
+        timeout = 0,
+    }
+    UIManager:show(info_msg)
+    
     AsyncTask:new(function()
-        return pcall(function()
-            -- Update API client with current credentials
-            self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
-            local sessions = self.db:getPendingSessions(BATCH_UPLOAD_SIZE)
-            
-            local synced_count = 0
-            local failed_count = 0
-            
-            for i, session in ipairs(sessions) do
-                -- Resolve bookId if missing
-                if not session.bookId and session.bookHash then
-                    local cached_book = self.db:getBookByHash(session.bookHash)
-                    if cached_book and cached_book.book_id then
-                        session.bookId = cached_book.book_id
+        -- Update API client with current credentials
+        self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
+        local sessions = self.db:getPendingSessions(BATCH_UPLOAD_SIZE)
+        
+        local synced_count = 0
+        local failed_count = 0
+        
+        local function syncSession(i)
+            if i > #sessions then
+                UIManager:close(info_msg)
+                self.sync_in_progress = false
+                if not silent and not self.silent_messages then
+                    local message = ""
+                    if synced_count > 0 and failed_count > 0 then
+                        message = T(_("Synced %1 sessions, %2 failed"), synced_count, failed_count)
+                    elseif synced_count > 0 then
+                        message = T(_("All %1 sessions synced successfully!"), synced_count)
                     else
-                        local success, book_data = self.api:getBookByHash(session.bookHash)
-                        if success and book_data and book_data.id then
-                            session.bookId = tonumber(book_data.id)
-                            if session.bookId then self.db:updateBookId(session.bookHash, session.bookId) end
-                        end
+                        message = _("All sync attempts failed - check connection")
                     end
+                    UIManager:show(InfoMessage:new{ text = message, timeout = 3 })
                 end
-                
+                return
+            end
+            local session = sessions[i]
+            if not session.bookId and session.bookHash then
+                self.api:getBookByHash(session.bookHash, function(success, book_data)
+                    if success and book_data and book_data.id then
+                        session.bookId = tonumber(book_data.id)
+                        if session.bookId then self.db:updateBookId(session.bookHash, session.bookId) end
+                    end
+                    if session.bookId then
+                        local session_data = {
+                            bookId = session.bookId,
+                            bookType = session.bookType,
+                            startTime = session.startTime,
+                            endTime = session.endTime,
+                            durationSeconds = session.durationSeconds,
+                            durationFormatted = self:formatDuration(session.durationSeconds),
+                            startProgress = self:roundProgress(session.startProgress),
+                            endProgress = self:roundProgress(session.endProgress),
+                            progressDelta = self:roundProgress(session.progressDelta),
+                            startLocation = session.startLocation,
+                            endLocation = session.endLocation,
+                        }
+                        self.api:submitSession(session_data, function(success, message, code)
+                            if success then
+                                synced_count = synced_count + 1
+                                self.db:archivePendingSession(session.id)
+                                self.db:deletePendingSession(session.id)
+                            else
+                                failed_count = failed_count + 1
+                                self.db:incrementSessionRetryCount(session.id)
+                            end
+                            syncSession(i + 1)
+                        end)
+                    else
+                        failed_count = failed_count + 1
+                        self.db:incrementSessionRetryCount(session.id)
+                        syncSession(i + 1)
+                    end
+                end)
+            else
                 if session.bookId then
                     local session_data = {
                         bookId = session.bookId,
@@ -2187,43 +2233,25 @@ function BookloreSync:syncPendingSessions(silent)
                         startLocation = session.startLocation,
                         endLocation = session.endLocation,
                     }
-                    
-                    local success, message = self.api:submitSession(session_data)
-                    if success then
-                        synced_count = synced_count + 1
-                        self.db:archivePendingSession(session.id)
-                        self.db:deletePendingSession(session.id)
-                    else
-                        failed_count = failed_count + 1
-                        self.db:incrementSessionRetryCount(session.id)
-                    end
+                    self.api:submitSession(session_data, function(success, message, code)
+                        if success then
+                            synced_count = synced_count + 1
+                            self.db:archivePendingSession(session.id)
+                            self.db:deletePendingSession(session.id)
+                        else
+                            failed_count = failed_count + 1
+                            self.db:incrementSessionRetryCount(session.id)
+                        end
+                        syncSession(i + 1)
+                    end)
                 else
                     failed_count = failed_count + 1
                     self.db:incrementSessionRetryCount(session.id)
+                    syncSession(i + 1)
                 end
             end
-            return true, synced_count, failed_count
-        end)
-    end,
-    function(success, result_ok, synced_count, failed_count)
-        self.sync_in_progress = false
-        if info_msg then UIManager:close(info_msg) end
-        if not success or not result_ok then
-            self:logErr("BookloreSync: syncPendingSessions failed")
-            return
         end
-
-        if not silent and not self.silent_messages then
-            local message = ""
-            if synced_count > 0 and failed_count > 0 then
-                message = T(_("Synced %1 sessions, %2 failed"), synced_count, failed_count)
-            elseif synced_count > 0 then
-                message = T(_("All %1 sessions synced successfully!"), synced_count)
-            else
-                message = _("All sync attempts failed - check connection")
-            end
-            UIManager:show(InfoMessage:new{ text = message, timeout = 3 })
-        end
+        syncSession(1)
     end):submit()
 end
 
