@@ -445,6 +445,8 @@ SELECT * FROM pending_sessions;
 - ✅ **Better Error Handling** - Enhanced API error extraction
 - ✅ **No Module Conflicts** - All modules prefixed with "booklore_"
 - ✅ **Optimized Sync Speed** - Bypasses MD5 hashing for books already in local cache
+- ✅ **Flash-Safe Logging** - Persistent file handle and lifecycle-aware closure to reduce flash storage wear
+- ✅ **Atomic Sync & Scan** - Bulk database operations wrapped in SQLite transactions for performance and integrity
 
 ### New Features
 

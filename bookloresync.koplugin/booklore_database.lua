@@ -316,6 +316,25 @@ function Database:close()
     end
 end
 
+-- Transaction management
+function Database:beginTransaction()
+    if self.conn then
+        self.conn:exec("BEGIN TRANSACTION")
+    end
+end
+
+function Database:commit()
+    if self.conn then
+        self.conn:exec("COMMIT")
+    end
+end
+
+function Database:rollback()
+    if self.conn then
+        self.conn:exec("ROLLBACK")
+    end
+end
+
 function Database:getCurrentVersion()
     -- Try PRAGMA user_version first
     local stmt = self.conn:prepare("PRAGMA user_version")
@@ -1145,32 +1164,43 @@ function Database:addHistoricalSessions(sessions)
         return false
     end
     
+    self:beginTransaction()
     local success_count = 0
-    for _, session in ipairs(sessions) do
-        stmt:bind(
-            session.koreader_book_id,
-            session.koreader_book_title,
-            session.book_id,
-            session.book_hash or "",
-            session.book_type or "EPUB",
-            session.start_time,
-            session.end_time,
-            session.duration_seconds,
-            session.start_progress,
-            session.end_progress,
-            session.progress_delta,
-            session.start_location or "",
-            session.end_location or "",
-            session.matched or 0
-        )
-        
-        local result = stmt:step()
-        if result == SQ3.DONE or result == SQ3.OK then
-            success_count = success_count + 1
+    local ok, err = pcall(function()
+        for _, session in ipairs(sessions) do
+            stmt:bind(
+                session.koreader_book_id,
+                session.koreader_book_title,
+                session.book_id,
+                session.book_hash or "",
+                session.book_type or "EPUB",
+                session.start_time,
+                session.end_time,
+                session.duration_seconds,
+                session.start_progress,
+                session.end_progress,
+                session.progress_delta,
+                session.start_location or "",
+                session.end_location or "",
+                session.matched or 0
+            )
+            
+            local result = stmt:step()
+            if result == SQ3.DONE or result == SQ3.OK then
+                success_count = success_count + 1
+            end
+            stmt:reset()
         end
-        stmt:reset()
+    end)
+
+    if not ok then
+        logger.err("BookloreSync Database: Failed to execute batch insert:", err)
+        self:rollback()
+        stmt:close()
+        return false
     end
     
+    self:commit()
     stmt:close()
     logger.info("BookloreSync Database: Inserted", success_count, "of", #sessions, "historical sessions")
     return success_count == #sessions
@@ -1460,25 +1490,29 @@ function Database:migrateFromLuaSettings(local_db)
     local failed_books = 0
     
     if book_cache.file_hashes and book_cache.book_ids then
-        for file_path, file_hash in pairs(book_cache.file_hashes) do
-            local book_id = book_cache.book_ids[file_hash]
-            
-            -- Debug logging
-            logger.dbg("BookloreSync Database: Migrating book - path:", file_path, "hash:", file_hash, "id:", book_id, "type:", type(book_id))
-            
-            local ok, err = pcall(function()
+        self:beginTransaction()
+        local ok, err = pcall(function()
+            for file_path, file_hash in pairs(book_cache.file_hashes) do
+                local book_id = book_cache.book_ids[file_hash]
+                
+                -- Debug logging
+                logger.dbg("BookloreSync Database: Migrating book - path:", file_path, "hash:", file_hash, "id:", book_id, "type:", type(book_id))
+                
                 local result = self:saveBookCache(file_path, file_hash, book_id, nil, nil)
-                if not result then
-                    error("saveBookCache returned false")
+                if result then
+                    migrated_books = migrated_books + 1
+                else
+                    failed_books = failed_books + 1
+                    logger.err("BookloreSync Database: Failed to migrate book cache entry:", file_path)
                 end
-            end)
-            
-            if ok then
-                migrated_books = migrated_books + 1
-            else
-                failed_books = failed_books + 1
-                logger.err("BookloreSync Database: Failed to migrate book cache entry:", file_path, "error:", err)
             end
+        end)
+        if ok then
+            self:commit()
+        else
+            self:rollback()
+            success = false
+            logger.err("BookloreSync Database: Migration of book cache failed:", err)
         end
     end
     
@@ -1489,25 +1523,36 @@ function Database:migrateFromLuaSettings(local_db)
     local migrated_sessions = 0
     local failed_sessions = 0
     
-    for i, session in ipairs(pending_sessions) do
-        -- Validate session data before migrating
-        if session.bookHash and session.startTime and session.endTime and session.durationSeconds then
-            local result = self:addPendingSession(session)
-            if result then
-                migrated_sessions = migrated_sessions + 1
+    self:beginTransaction()
+    local ok_session, err_session = pcall(function()
+        for i, session in ipairs(pending_sessions) do
+            -- Validate session data before migrating
+            if session.bookHash and session.startTime and session.endTime and session.durationSeconds then
+                local result = self:addPendingSession(session)
+                if result then
+                    migrated_sessions = migrated_sessions + 1
+                else
+                    failed_sessions = failed_sessions + 1
+                    logger.warn("BookloreSync Database: Failed to migrate session", i)
+                end
             else
                 failed_sessions = failed_sessions + 1
-                logger.warn("BookloreSync Database: Failed to migrate session", i)
+                logger.warn("BookloreSync Database: Skipping invalid session", i, "- missing required fields")
             end
-        else
-            failed_sessions = failed_sessions + 1
-            logger.warn("BookloreSync Database: Skipping invalid session", i, "- missing required fields")
         end
+    end)
+    
+    if ok_session then
+        self:commit()
+    else
+        self:rollback()
+        success = false
+        logger.err("BookloreSync Database: Migration of pending sessions failed:", err_session)
     end
     
     logger.info("BookloreSync Database: Migrated", migrated_sessions, "pending sessions,", failed_sessions, "failed/invalid")
     
-    if failed_books > 0 or failed_sessions > 0 then
+    if failed_books > 0 or failed_sessions > 0 or not success then
         logger.warn("BookloreSync Database: Migration completed with errors")
         success = false
     end

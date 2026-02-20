@@ -1,45 +1,43 @@
-# BRANCH STATUS: Dynamic UI Progress Updates
+# BRANCH STATUS: Dynamic UI Progress & Performance Optimizations
 
 ## 1. BRANCH CONTEXT / DEEP DIVE
-
-*(Generated at branch start. Source of truth for architectural context.)*
 
 ### 1.1 Architecture & Core Components
 
 - **Entry Points**: `main.lua`
-- **Dependencies**: KOReader `ui/uimanager` and `ui/widget/infomessage`
+- **Modules**: `booklore_database.lua`, `booklore_file_logger.lua`
+- **Dependencies**: KOReader `ui/uimanager`, `sqlite3`
 
 ### 1.2 Database & Data Structure
 
-- **Key Tables/Models**: None for this fix.
-- **Critical Fields**: None for this fix.
+- **Transactions**: Implemented `BEGIN TRANSACTION`/`COMMIT` wrappers for bulk `INSERT`/`UPDATE` operations in the book cache and historical sessions.
 
 ### 1.3 Key Workflows
 
-- **Sync / Scan Feedback**: Updates the existing `InfoMessage` widget during long-running loops in `syncFromBookloreShelf()` and `scanLibrary()` via safe UI thread dispatching (`UIManager:scheduleIn`).
+- **Dynamic Progress**: Real-time feedback in `syncFromBookloreShelf()` and `scanLibrary()`.
+- **Logger Lifecycle**: `onSuspend` and `onExit` ensure proper file handle closure to minimize flash storage wear.
 
 ### 1.4 Known Issues
 
-- Currently, users see a static "Syncing..." or "Scanning..." message until the process finishes, which can feel uninformative or look frozen during large operations.
+- Fixed: Static UI during large library operations.
+- Fixed: Excessive I/O from frequent logger open/close calls.
 
 ## 2. CURRENT OBJECTIVE
 
-- [x] Initial Deep Dive & Planning
-- [x] Implement UI updates in `syncFromBookloreShelf()`
-- [x] Implement UI updates in `scanLibrary()`
-- [x] Add cache bypass check before calculating MD5 hash in `syncFromBookloreShelf()`
-- [x] Run Lua syntax tests
-- [x] Context: Add dynamic progress text to avoid the appearance of the plugin hanging and optimize performance by skipping hashing for cached books.
+- [x] Implement UI updates in `syncFromBookloreShelf()` and `scanLibrary()`
+- [x] Implement MD5 hash caching bypass
+- [x] Implement SQLite transaction wrapping for bulk operations
+- [x] Optimize File Logger I/O with persistent file handle
+- [x] Ensure proper lifecycle management for database and logger
 
 ## 3. CRITICAL FILE MAP
 
-*(The AI must maintain this list. Add files here before editing them.)*
-
 - `bookloresync.koplugin/main.lua`
+- `bookloresync.koplugin/booklore_database.lua`
+- `bookloresync.koplugin/booklore_file_logger.lua`
 
 ## 4. CHANGE LOG (Newest Top)
 
-- **2026-02-20**: Added MD5 hash caching bypass in `syncFromBookloreShelf()` algorithm to optimize sync speed for existing local books. Tested and verified script syntax functionality.
-- **2026-02-20**: Finalized dynamic UI progress tracking updates testing.
-- **2026-02-20**: Implemented safe UI thread updates (`UIManager:scheduleIn`) during AsyncTask loops in `main.lua` (`syncFromBookloreShelf()` and `scanLibrary()`).
+- **2026-02-20**: Implemented SQLite transaction wrapping and File Logger I/O optimization.
+- **2026-02-20**: Added MD5 hash caching bypass and dynamic UI updates in `main.lua`.
 - **2026-02-20**: Initialized branch with Deep Dive and implementation plan.
