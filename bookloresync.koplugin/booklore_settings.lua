@@ -7,6 +7,7 @@ Handles all user configuration for the Booklore KOReader plugin.
 --]]--
 
 local InputDialog = require("ui/widget/inputdialog")
+local ButtonDialogTitle = require("ui/widget/buttondialogtitle")
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
 local T = require("ffi/util").template
@@ -289,6 +290,147 @@ function Settings:showVersion(parent)
     })
 end
 
+function Settings:configureShelfId(parent)
+    local input_dialog
+    input_dialog = InputDialog:new{
+        title = _("Booklore Shelf ID"),
+        input = tostring(parent.shelf_id),
+        input_hint = "2",
+        input_type = "number",
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    callback = function()
+                        UIManager:close(input_dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    is_enter_default = true,
+                    callback = function()
+                        local value = tonumber(input_dialog:getInputText())
+                        if value and value > 0 and value == math.floor(value) then
+                            parent.shelf_id = value
+                            parent.settings:saveSetting("shelf_id", parent.shelf_id)
+                            parent.settings:flush()
+                            UIManager:close(input_dialog)
+                            UIManager:show(InfoMessage:new{
+                                text = T(_("Shelf ID set to %1"), tostring(parent.shelf_id)),
+                                timeout = 2,
+                            })
+                        else
+                            UIManager:show(InfoMessage:new{
+                                text = _("Please enter a valid shelf ID (positive integer)"),
+                                timeout = 2,
+                            })
+                        end
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(input_dialog)
+    input_dialog:onShowKeyboard()
+end
+
+function Settings:pickShelfFromServer(parent)
+    if not (parent.booklore_username and parent.booklore_username ~= "" and
+            parent.booklore_password and parent.booklore_password ~= "") then
+        UIManager:show(InfoMessage:new{
+            text = _("Booklore credentials not configured.\nPlease set your username and password first."),
+            timeout = 3,
+        })
+        return
+    end
+
+    UIManager:show(InfoMessage:new{
+        text = _("Loading shelves..."),
+        timeout = 1,
+    })
+
+    UIManager:scheduleIn(0.1, function()
+        local ok, shelves = parent.api:getShelves(parent.booklore_username, parent.booklore_password)
+        if not ok or type(shelves) ~= "table" or #shelves == 0 then
+            UIManager:show(InfoMessage:new{
+                text = T(_("Could not load shelves:\n%1"), tostring(shelves)),
+                timeout = 3,
+            })
+            return
+        end
+
+        local buttons = {}
+        for _, shelf in ipairs(shelves) do
+            local shelf_id = shelf.id
+            local shelf_name = shelf.name or tostring(shelf_id)
+            table.insert(buttons, {
+                {
+                    text = shelf_name .. (shelf_id == parent.shelf_id and " ✓" or ""),
+                    callback = function()
+                        UIManager:close(self._shelf_picker)
+                        parent.shelf_id = shelf_id
+                        parent.settings:saveSetting("shelf_id", parent.shelf_id)
+                        parent.settings:flush()
+                        UIManager:show(InfoMessage:new{
+                            text = T(_("Shelf set to \"%1\" (ID %2)"), shelf_name, tostring(shelf_id)),
+                            timeout = 2,
+                        })
+                    end,
+                },
+            })
+        end
+
+        self._shelf_picker = ButtonDialogTitle:new{
+            title = _("Select Shelf"),
+            buttons = buttons,
+        }
+        UIManager:show(self._shelf_picker)
+    end)
+end
+
+function Settings:configureDownloadDir(parent)
+    local input_dialog
+    input_dialog = InputDialog:new{
+        title = _("Download Directory"),
+        input = parent.download_dir,
+        input_hint = "/mnt/onboard/Books",
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    callback = function()
+                        UIManager:close(input_dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    is_enter_default = true,
+                    callback = function()
+                        local value = input_dialog:getInputText()
+                        if value and value ~= "" then
+                            parent.download_dir = value
+                            parent.settings:saveSetting("download_dir", parent.download_dir)
+                            parent.settings:flush()
+                            UIManager:close(input_dialog)
+                            UIManager:show(InfoMessage:new{
+                                text = T(_("Download directory set to:\n%1"), parent.download_dir),
+                                timeout = 2,
+                            })
+                        else
+                            UIManager:show(InfoMessage:new{
+                                text = _("Please enter a valid directory path"),
+                                timeout = 2,
+                            })
+                        end
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(input_dialog)
+    input_dialog:onShowKeyboard()
+end
+
 function Settings:buildConnectionMenu(parent)
     return {
         text = _("Setup & Connection"),
@@ -317,7 +459,34 @@ function Settings:buildConnectionMenu(parent)
                     self:configurePassword(parent)
                 end,
             },
-            -- (Shelf Name menu entry removed)
+            {
+                text_func = function()
+                    return T(_("Shelf (ID: %1)"), tostring(parent.shelf_id))
+                end,
+                help_text = _("The Booklore shelf to sync books from. Tap to pick from a list of your shelves, or enter the shelf ID manually."),
+                keep_menu_open = true,
+                callback = function()
+                    self:pickShelfFromServer(parent)
+                end,
+            },
+            {
+                text = _("Shelf ID (manual)"),
+                help_text = _("Enter your Booklore shelf ID directly if the shelf picker is unavailable."),
+                keep_menu_open = true,
+                callback = function()
+                    self:configureShelfId(parent)
+                end,
+            },
+            {
+                text_func = function()
+                    return T(_("Download Directory: %1"), parent.download_dir)
+                end,
+                help_text = _("Local directory where books synced from your Booklore shelf will be saved."),
+                keep_menu_open = true,
+                callback = function()
+                    self:configureDownloadDir(parent)
+                end,
+            },
             {
                 text = _("Test Connection"),
                 help_text = _("Test the connection to your Booklore server to verify your credentials and network connectivity."),

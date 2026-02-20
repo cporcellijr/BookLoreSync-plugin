@@ -970,6 +970,36 @@ function APIClient:getBooksInShelf(shelf_id, username, password)
 end
 
 --[[--
+Get all shelves for the authenticated user
+
+@param username Booklore username
+@param password Booklore password
+@return boolean success
+@return table|string shelves array or error message
+--]]
+function APIClient:getShelves(username, password)
+    self:logInfo("BookloreSync API: Getting shelves for user:", username)
+
+    local login_success, token = self:getOrRefreshBearerToken(username, password)
+    if not login_success then
+        self:logErr("BookloreSync API: Failed to get Bearer token:", token)
+        return false, token
+    end
+
+    local headers = { ["Authorization"] = "Bearer " .. token }
+    local success, code, response = self:request("GET", "/api/v1/shelves", nil, headers)
+
+    if success and type(response) == "table" then
+        self:logInfo("BookloreSync API: Found", #response, "shelves")
+        return true, response
+    end
+
+    local error_msg = response or "Could not retrieve shelves"
+    self:logWarn("BookloreSync API: Failed to get shelves:", error_msg)
+    return false, error_msg
+end
+
+--[[--
 Download book file from Booklore server
 
 @param book_id Booklore book ID (number)

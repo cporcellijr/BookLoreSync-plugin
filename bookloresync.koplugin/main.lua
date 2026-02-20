@@ -20,7 +20,6 @@ local ButtonDialog = require("ui/widget/buttondialog")
 local Settings = require("booklore_settings")
 local Database = require("booklore_database")
 local APIClient = require("booklore_api_client")
-local Updater = require("booklore_updater")
 local FileLogger = require("booklore_file_logger")
 local logger = require("logger")
 
@@ -159,6 +158,10 @@ function BookloreSync:init()
     self.booklore_password = self.settings:readSetting("booklore_password") or ""
     -- (self.booklore_shelf_name removed per optimization request)
 
+    -- Shelf sync settings
+    self.shelf_id = self.settings:readSetting("shelf_id") or 2
+    self.download_dir = self.settings:readSetting("download_dir") or self:_detectDefaultDownloadDir()
+
     -- Auto-sync from shelf on resume
     self.auto_sync_shelf_on_resume = self.settings:readSetting("auto_sync_shelf_on_resume")
     if self.auto_sync_shelf_on_resume == nil then
@@ -246,64 +249,6 @@ function BookloreSync:init()
     -- Initialize API client
     self.api = APIClient:new()
     self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
-    
-    -- Initialize updater
-    self.updater = Updater:new()
-    
-    -- Detect plugin directory from current file path
-    local source = debug.getinfo(1, "S").source
-    local plugin_dir = source:match("@(.*)/")
-    if not plugin_dir or not plugin_dir:match("bookloresync%.koplugin$") then
-        -- Fallback: use data directory
-        plugin_dir = DataStorage:getDataDir() .. "/bookloresync.koplugin"
-    end
-    
-    self.updater:init(plugin_dir, self.db)
-    
-    -- Auto-update check settings
-    self.auto_update_check = self.settings:readSetting("auto_update_check")
-    if self.auto_update_check == nil then
-        self.auto_update_check = true  -- Default enabled
-    end
-    
-    self.last_update_check = self.settings:readSetting("last_update_check") or 0
-    self.update_available = false  -- Flag for menu badge
-    
-    -- Schedule auto-check for updates (5-second delay, once per day)
-    if self.auto_update_check then
-        UIManager:scheduleIn(5, function()
-            self:autoCheckForUpdates()
-        end)
-    end
-    
-    -- Initialize updater
-    self.updater = Updater:new()
-    
-    -- Detect plugin directory from current file path
-    local source = debug.getinfo(1, "S").source
-    local plugin_dir = source:match("@(.*)/")
-    if not plugin_dir or not plugin_dir:match("bookloresync%.koplugin$") then
-        -- Fallback: use data directory
-        plugin_dir = DataStorage:getDataDir() .. "/bookloresync.koplugin"
-    end
-    
-    self.updater:init(plugin_dir, self.db)
-    
-    -- Auto-update check settings
-    self.auto_update_check = self.settings:readSetting("auto_update_check")
-    if self.auto_update_check == nil then
-        self.auto_update_check = true  -- Default enabled
-    end
-    
-    self.last_update_check = self.settings:readSetting("last_update_check") or 0
-    self.update_available = false  -- Flag for menu badge
-    
-    -- Schedule auto-check for updates (5-second delay, once per day)
-    if self.auto_update_check then
-        UIManager:scheduleIn(5, function()
-            self:autoCheckForUpdates()
-        end)
-    end
     
     -- Register menu
     self.ui.menu:registerToMainMenu(self)
@@ -468,7 +413,7 @@ function BookloreSync:onSyncBookloreShelf()
         if success then
             local FileManager = require("apps/filemanager/filemanager")
             if FileManager.instance then
-                FileManager.instance:reinit("/mnt/onboard/Books")
+                FileManager.instance:reinit(self.download_dir)
             end
         end
     end)
@@ -571,6 +516,21 @@ Uses database cache to avoid re-downloading books that are already on the device
 @return boolean success
 @return string message (user-friendly result message)
 --]]
+
+--[[--
+Detect a sensible default download directory based on the current device.
+--]]
+function BookloreSync:_detectDefaultDownloadDir()
+    local lfs = require("libs/libkoreader-lfs")
+    if lfs.attributes("/mnt/onboard", "mode") == "directory" then
+        return "/mnt/onboard/Books"   -- Kobo
+    elseif lfs.attributes("/sdcard", "mode") == "directory" then
+        return "/sdcard/Books"         -- Android
+    else
+        return "/Books"                -- Generic fallback
+    end
+end
+
 function BookloreSync:syncFromBookloreShelf()
     -- Check if Booklore credentials are configured
     if not self.booklore_username or self.booklore_username == "" or
@@ -578,10 +538,9 @@ function BookloreSync:syncFromBookloreShelf()
         return false, "Booklore credentials not configured. Please configure your Booklore account first."
     end
 
-    self:logInfo("BookloreSync: syncFromBookloreShelf — starting sync from shelf ID: 2")
+    self:logInfo("BookloreSync: syncFromBookloreShelf — starting sync from shelf ID:", self.shelf_id)
 
-    -- Task 1: Hardcode shelf ID to 2
-    local shelf_id = 2
+    local shelf_id = self.shelf_id
 
     -- Get books in shelf
     local books_ok, books = self.api:getBooksInShelf(shelf_id, self.booklore_username, self.booklore_password)
@@ -595,8 +554,7 @@ function BookloreSync:syncFromBookloreShelf()
 
     self:logInfo("BookloreSync: syncFromBookloreShelf — found", #books, "books in shelf")
 
-    -- Download directory (KOReader standard location)
-    local download_dir = "/mnt/onboard/Books"
+    local download_dir = self.download_dir
 
     -- Check if download directory exists
     local lfs = require("libs/libkoreader-lfs")
@@ -773,7 +731,7 @@ function BookloreSync:addToMainMenu(menu_items)
                         if success then
                             local FileManager = require("apps/filemanager/filemanager")
                             if FileManager.instance then
-                                FileManager.instance:reinit("/mnt/onboard/Books")
+                                FileManager.instance:reinit(self.download_dir)
                             end
                         end
                     end)
@@ -1130,39 +1088,15 @@ function BookloreSync:addToMainMenu(menu_items)
     -- Preferences submenu
     table.insert(base_menu, Settings:buildPreferencesMenu(self))
     
-    -- About & Updates submenu
+    -- About submenu
     table.insert(base_menu, {
-        text = self.update_available and _("About & Updates ⚠") or _("About & Updates"),
+        text = _("About"),
         sub_item_table = {
             {
                 text = _("Plugin Information"),
                 keep_menu_open = true,
                 callback = function()
                     self:showVersionInfo()
-                end,
-            },
-            {
-                text = self.update_available and _("Check for Updates ⚠ Update Available!") or _("Check for Updates"),
-                keep_menu_open = true,
-                callback = function()
-                    self:checkForUpdates(false)  -- silent=false
-                end,
-            },
-            {
-                text = _("Auto-check on Startup"),
-                checked_func = function()
-                    return self.auto_update_check
-                end,
-                callback = function()
-                    self:toggleAutoUpdateCheck()
-                end,
-            },
-            {
-                text = _("Clear Update Cache"),
-                help_text = _("Force a fresh check by clearing cached release info"),
-                keep_menu_open = true,
-                callback = function()
-                    self:clearUpdateCache()
                 end,
             },
         },
@@ -1595,8 +1529,7 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id)
         
         local headers = { ["Authorization"] = "Bearer " .. token }
         
-        -- Task 1 applied to Deletion: Hardcode shelf ID to 2 and Remove Extra API Call
-        local shelf_id = 2
+        local shelf_id = self.shelf_id
         
         self:logInfo("BookloreSync: notifyBookloreOnDeletion — removing book", book_id, "from shelf", shelf_id)
 
@@ -3791,386 +3724,7 @@ end
 Show version information dialog
 --]]
 function BookloreSync:showVersionInfo()
-    local version_info = self.updater:getCurrentVersion()
-    
-    local text = T(_([[Version Information
-
-Current Version: %1
-Version Type: %2
-Build Date: %3
-Git Commit: %4]]),
-        version_info.version,
-        version_info.version_type,
-        version_info.build_date,
-        version_info.git_commit
-    )
-    
-    -- Add update status if known
-    if self.update_available then
-        text = text .. _("\n\n⚠ Update available!")
-    end
-    
-    UIManager:show(InfoMessage:new{
-        text = text,
-        timeout = 10,
-    })
-end
-
---[[--
-Auto-check for updates (runs once per day, silent mode)
---]]
-function BookloreSync:autoCheckForUpdates()
-    -- Check if 24 hours passed since last check
-    local now = os.time()
-    if now - self.last_update_check < 86400 then
-        logger.info("BookloreSync Updater: Auto-check skipped (last check was less than 24 hours ago)")
-        return
-    end
-    
-    -- Update last check timestamp
-    self.last_update_check = now
-    self.settings:saveSetting("last_update_check", now)
-    self.settings:flush()
-    
-    -- Check network
-    if not NetworkMgr:isConnected() then
-        logger.info("BookloreSync Updater: No network, skipping auto-check")
-        return
-    end
-    
-    logger.info("BookloreSync Updater: Running auto-check for updates")
-    
-    -- Check for updates (use cache)
-    local result = self.updater:checkForUpdates(true)
-    
-    if not result then
-        logger.warn("BookloreSync Updater: Auto-check failed")
-        return
-    end
-    
-    if result.available then
-        -- Set flag for menu badge
-        self.update_available = true
-        
-        logger.info("BookloreSync Updater: Update available:", result.latest_version)
-        
-        -- Show notification
-        UIManager:show(InfoMessage:new{
-            text = T(_([[BookloreSync update available!
-
-Current: %1
-Latest: %2
-
-Go to Tools → Booklore Sync → About & Updates to install.]]),
-                result.current_version, result.latest_version),
-            timeout = 8,
-        })
-    else
-        logger.info("BookloreSync Updater: Already up to date")
-    end
-end
-
---[[--
-Check for updates (manual or auto)
-
-@param silent If true, only show message when update available
---]]
-function BookloreSync:checkForUpdates(silent)
-    -- Check network
-    if not NetworkMgr:isConnected() then
-        if not silent then
-            UIManager:show(InfoMessage:new{
-                text = _("No network connection.\n\nPlease connect to check for updates."),
-                timeout = 3,
-            })
-        end
-        return
-    end
-    
-    -- Show "Checking..." message
-    if not silent then
-        UIManager:show(InfoMessage:new{
-            text = _("Checking for updates..."),
-            timeout = 1,
-        })
-    end
-    
-    -- Check for updates (use cache if silent, fresh if manual)
-    local result = self.updater:checkForUpdates(silent)
-    
-    if not result then
-        if not silent then
-            UIManager:show(InfoMessage:new{
-                text = _("Failed to check for updates.\n\nPlease try again later."),
-                timeout = 3,
-            })
-        end
-        return
-    end
-    
-    if result.available then
-        -- Update available
-        self.update_available = true
-        
-        local size_text = self.updater:formatBytes(result.release_info.size)
-        
-        -- Build button list
-        local buttons = {
-            {
-                {
-                    text = _("Install"),
-                    callback = function()
-                        UIManager:close(self.update_dialog)
-                        self:installUpdate(result.release_info.download_url, result.latest_version)
-                    end,
-                },
-            },
-        }
-        
-        -- Add changelog button if available
-        if result.release_info.changelog_url then
-            table.insert(buttons, {
-                {
-                    text = _("View Changelog"),
-                    callback = function()
-                        UIManager:close(self.update_dialog)
-                        self:showChangelog(result.release_info.changelog_url, result.latest_version, result.release_info)
-                    end,
-                },
-            })
-        end
-        
-        -- Add cancel button
-        table.insert(buttons, {
-            {
-                text = _("Cancel"),
-                callback = function()
-                    UIManager:close(self.update_dialog)
-                end,
-            },
-        })
-        
-        -- Show update dialog with buttons
-        self.update_dialog = ButtonDialog:new{
-            title = T(_([[Update available!
-
-Current version: %1
-Latest version: %2
-
-Download size: %3]]),
-                result.current_version,
-                result.latest_version,
-                size_text),
-            buttons = buttons,
-        }
-        
-        UIManager:show(self.update_dialog)
-    else
-        -- No update available
-        self.update_available = false
-        
-        if not silent then
-            UIManager:show(InfoMessage:new{
-                text = T(_("You're up to date!\n\nCurrent version: %1"), result.current_version),
-                timeout = 3,
-            })
-        end
-    end
-end
-
---[[--
-Show changelog for the new version
-
-@param changelog_url URL to download changelog from
-@param version Version number
-@param release_info Full release info object for showing update dialog again
---]]
-function BookloreSync:showChangelog(changelog_url, version, release_info)
-    -- Show loading message
-    local loading_msg = InfoMessage:new{
-        text = _("Loading changelog..."),
-    }
-    UIManager:show(loading_msg)
-    
-    -- Fetch full CHANGELOG.md content from URL
-    local full_changelog_content, error_msg = self.updater:fetchChangelog(changelog_url)
-    
-    UIManager:close(loading_msg)
-    
-    -- Check if we got the changelog file
-    if not full_changelog_content then
-        UIManager:show(InfoMessage:new{
-            text = T(_("Failed to load changelog:\n%1"), error_msg or "Unknown error"),
-            timeout = 3,
-        })
-        -- Show update dialog again after error
-        self:checkForUpdates(true)
-        return
-    end
-    
-    -- Parse the CHANGELOG.md to extract just this version's section
-    local changelog_text = self.updater:parseChangelogForVersion(full_changelog_content, version)
-    
-    if not changelog_text or changelog_text == "" then
-        -- Fallback to showing the whole changelog if parsing failed
-        logger.warn("BookloreSync: Could not parse version-specific changelog, showing full file")
-        changelog_text = full_changelog_content
-    end
-    
-    -- Clean changelog by removing links and commit references
-    changelog_text = self.updater:cleanChangelog(changelog_text)
-    
-    -- Show changelog in a scrollable text widget
-    local Screen = require("device").screen
-    local TextViewer = require("ui/widget/textviewer")
-    
-    local changelog_viewer
-    changelog_viewer = TextViewer:new{
-        title = T(_("Changelog - Version %1"), version),
-        text = changelog_text,
-        width = math.floor(Screen:getWidth() * 0.8),
-        height = math.floor(Screen:getHeight() * 0.7),
-        buttons_table = {
-            {
-                {
-                    text = _("Install Update"),
-                    callback = function()
-                        UIManager:close(changelog_viewer)
-                        self:installUpdate(release_info.download_url, version)
-                    end,
-                },
-            },
-            {
-                {
-                    text = _("Close"),
-                    callback = function()
-                        UIManager:close(changelog_viewer)
-                    end,
-                },
-            },
-        },
-    }
-    
-    UIManager:show(changelog_viewer)
-end
-
---[[--
-Install update from download URL
-
-@param download_url URL to download ZIP from
-@param version Version being installed
---]]
-function BookloreSync:installUpdate(download_url, version)
-    -- Show initial progress message
-    local progress_msg = InfoMessage:new{
-        text = _("Downloading update...\n0%"),
-    }
-    UIManager:show(progress_msg)
-    
-    -- Download with progress callback
-    local success, zip_path_or_error = self.updater:downloadUpdate(
-        download_url,
-        function(bytes_downloaded, total_bytes)
-            -- Update progress message
-            if total_bytes > 0 then
-                local progress = math.floor((bytes_downloaded / total_bytes) * 100)
-                progress_msg:setText(T(_("Downloading update...\n%1%%"), progress))
-                UIManager:setDirty(progress_msg, "ui")
-            end
-        end
-    )
-    
-    UIManager:close(progress_msg)
-    
-    if not success then
-        UIManager:show(InfoMessage:new{
-            text = T(_("Download failed:\n%1"), zip_path_or_error),
-            timeout = 5,
-        })
-        return
-    end
-    
-    -- Show installation progress
-    UIManager:show(InfoMessage:new{
-        text = _("Installing update..."),
-        timeout = 2,
-    })
-    
-    -- Install update (includes backup)
-    success, error_msg = self.updater:installUpdate(zip_path_or_error)
-    
-    if success then
-        -- Success! Ask for restart with custom message
-        UIManager:askForRestart(T(_([[Update installed successfully!
-
-Version %1 is ready.
-
-Restart KOReader now?]]), version))
-    else
-        -- Installation failed, offer rollback
-        UIManager:show(ConfirmBox:new{
-            text = T(_([[Installation failed:
-%1
-
-Rollback to previous version?]]), error_msg),
-            ok_text = _("Rollback"),
-            ok_callback = function()
-                self:rollbackUpdate()
-            end,
-            cancel_text = _("Cancel"),
-        })
-    end
-end
-
---[[--
-Rollback to previous version after failed update
---]]
-function BookloreSync:rollbackUpdate()
-    UIManager:show(InfoMessage:new{
-        text = _("Rolling back to previous version..."),
-        timeout = 2,
-    })
-    
-    local success, error_msg = self.updater:rollback()
-    
-    if success then
-        -- Rollback successful, ask for restart
-        UIManager:askForRestart(_("Rollback successful!\n\nRestart KOReader now?"))
-    else
-        UIManager:show(InfoMessage:new{
-            text = T(_("Rollback failed:\n%1"), error_msg),
-            timeout = 5,
-        })
-    end
-end
-
---[[--
-Toggle auto-update check setting
---]]
-function BookloreSync:toggleAutoUpdateCheck()
-    self.auto_update_check = not self.auto_update_check
-    self.settings:saveSetting("auto_update_check", self.auto_update_check)
-    self.settings:flush()
-    
-    UIManager:show(InfoMessage:new{
-        text = self.auto_update_check and 
-            _("Auto-update check enabled.\n\nWill check once per day on startup.") or
-            _("Auto-update check disabled."),
-        timeout = 2,
-    })
-end
-
---[[--
-Clear update cache to force fresh check
---]]
-function BookloreSync:clearUpdateCache()
-    self.updater:clearCache()
-    self.update_available = false
-    
-    UIManager:show(InfoMessage:new{
-        text = _("Update cache cleared.\n\nNext check will fetch fresh data."),
-        timeout = 2,
-    })
+    Settings:showVersion(self)
 end
 
 return BookloreSync
