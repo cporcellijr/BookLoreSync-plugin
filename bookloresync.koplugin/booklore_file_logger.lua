@@ -17,7 +17,7 @@ local FileLogger = {
     max_files = 3,
     max_size = 1048576, -- 1MB
     buffer = {},
-    buffer_limit = 15,
+    buffer_limit = 20,
 }
 
 function FileLogger:new(o)
