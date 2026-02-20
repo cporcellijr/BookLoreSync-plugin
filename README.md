@@ -11,6 +11,7 @@ Automatically track your reading sessions in KOReader and sync them to your Book
 ## Features
 
 ### 📚 Automatic Session Tracking
+
 - **Smart Detection** - Automatically starts tracking when you open a book
 - **Progress Tracking** - Records reading progress (0-100%) with configurable precision
 - **Duration Tracking** - Measures time spent reading in seconds
@@ -19,12 +20,14 @@ Automatically track your reading sessions in KOReader and sync them to your Book
 - **Suspend/Resume** - Handles device sleep and wake events
 
 ### 📊 Session Validation
+
 - **Minimum Duration** - Only save sessions longer than X seconds (default: 30)
 - **Minimum Pages** - Only save sessions with Y+ pages read (default: 5)
 - **Detection Mode** - Choose duration-based OR pages-based validation
 - **Skip Zero Progress** - Automatically reject sessions with no progress
 
 ### 🔄 Offline Support
+
 - **Queue When Offline** - Sessions saved locally when server unavailable
 - **Auto-Sync** - Syncs queued sessions when connection restored
 - **Retry Logic** - Failed syncs automatically retried with counter
@@ -32,12 +35,14 @@ Automatically track your reading sessions in KOReader and sync them to your Book
 - **Batch Upload** - Historical sessions uploaded in batches (up to 100 per batch) for 10-20x faster syncing, with automatic fallback to individual uploads for older servers
 
 ### 🗄️ Smart Caching
+
 - **Book Hash Calculation** - Fast MD5 fingerprinting using sample-based algorithm
 - **Book ID Mapping** - Maps file hashes to Booklore book IDs
 - **SQLite Database** - Robust local caching with migrations
 - **File Path Caching** - Remembers books by file location
 
 ### ⚙️ Flexible Configuration
+
 - **Server URL** - Connect to any Booklore server
 - **Authentication** - Username/password with MD5 hashing
 - **Session Thresholds** - Customize min duration and pages
@@ -46,6 +51,7 @@ Automatically track your reading sessions in KOReader and sync them to your Book
 - **Silent Mode** - Disable popup notifications
 
 ### 🔄 Auto-Update System
+
 - **Self-Updating** - Update plugin from within KOReader
 - **GitHub Integration** - Automatically fetches latest releases
 - **One-Click Install** - Download and install updates with single tap
@@ -61,6 +67,7 @@ Automatically track your reading sessions in KOReader and sync them to your Book
 ### Installation
 
 1. **Copy plugin to KOReader:**
+
    ```bash
    cp -r bookloresync.koplugin ~/.config/koreader/plugins/
    ```
@@ -105,6 +112,7 @@ For detailed testing instructions, see [QUICK_START.md](QUICK_START.md).
    - See update status
 
 **Update Process**:
+
 - Downloads latest version from GitHub
 - Creates backup of current version automatically
 - Installs new version atomically
@@ -187,6 +195,7 @@ bookloresync.koplugin/
 ### Database Schema
 
 **book_cache** - Caches book information
+
 - `file_path` (unique) - Full path to book file
 - `file_hash` (indexed) - MD5 hash of book content
 - `book_id` - Booklore server book ID (nullable)
@@ -194,6 +203,7 @@ bookloresync.koplugin/
 - `created_at`, `updated_at` - Timestamps
 
 **pending_sessions** - Queued sessions waiting to sync
+
 - `book_id` - Booklore book ID (nullable if offline)
 - `book_hash` - MD5 hash for resolution
 - `start_time`, `end_time` - ISO 8601 timestamps
@@ -223,11 +233,13 @@ Authentication uses MD5-hashed password for compatibility with Booklore server.
 ## Configuration Options
 
 ### Connection
+
 - **Server URL** - Booklore server address (e.g., `http://localhost:6060`)
 - **Username** - Your Booklore username
 - **Password** - Your Booklore password (stored as MD5 hash)
 
 ### Session Tracking
+
 - **Enable/Disable** - Turn sync on/off
 - **Min Duration** - Minimum seconds to save session (default: 30)
 - **Min Pages** - Minimum pages to save session (default: 5)
@@ -235,12 +247,14 @@ Authentication uses MD5-hashed password for compatibility with Booklore server.
 - **Progress Decimals** - 0-5 decimal places (default: 2)
 
 ### Sync Options
+
 - **Manual Sync Only** - Disable auto-sync, sync manually
 - **Silent Messages** - Hide popup notifications
 - **Force Push on Suspend** - (UI only, not implemented)
 - **Connect Network on Suspend** - (UI only, not implemented)
 
 ### Advanced
+
 - **Clear Cache** - Remove all cached book data
 - **Clear Pending Sessions** - Delete queued sessions
 - **View Statistics** - See cache size and pending count
@@ -271,6 +285,7 @@ See [features.md](features.md) for detailed feature tracking.
 ## Known Limitations
 
 ### Deferred for Post-Launch
+
 These features are not critical and intentionally deferred:
 
 1. **Historical Data Sync** - Import sessions from `statistics.sqlite3`
@@ -286,6 +301,7 @@ These features are not critical and intentionally deferred:
    - Can add if users request it
 
 ### By Design
+
 - **Auto-sync on reader ready** - Not implemented to avoid startup delays
 - **Force push on suspend** - UI exists but behavior not implemented
 
@@ -294,32 +310,38 @@ These features are not critical and intentionally deferred:
 ## Troubleshooting
 
 ### Plugin Not Appearing in Menu
+
 - Ensure files are in `~/.config/koreader/plugins/bookloresync.koplugin/`
 - Restart KOReader completely (not just sleep mode)
 - Check KOReader log for Lua errors
 
 ### Connection Test Fails
+
 ```bash
 # Verify server is running
 curl http://localhost:6060/api/health
 
 # Should return: {"status":"ok"}
 ```
+
 - Check server URL is correct
 - Verify server is running and accessible
 - Check username/password are correct
 
 ### Sessions Not Syncing
+
 - Check **Tools → Booklore Sync → View Statistics** for pending count
 - Verify **Manual Sync Only** is disabled (if you want auto-sync)
 - Check KOReader log: `tail -f /tmp/koreader.log | grep BookloreSync`
 - Try manual sync: **Tools → Booklore Sync → Sync Now**
 
 ### "bad argument #1 to 'floor'" Error
+
 - **Cause:** KOReader didn't reload updated plugin code
 - **Fix:** Restart KOReader completely
 
 ### Database Errors
+
 ```bash
 # Reset database (WARNING: deletes all cached data)
 rm ~/.config/koreader/settings/booklore-sync.sqlite
@@ -333,10 +355,13 @@ For more help, see [DEBUG_REFERENCE.md](DEBUG_REFERENCE.md).
 ## Testing
 
 ### Quick Test (5 minutes)
+
 See [QUICK_START.md](QUICK_START.md) for a simple 5-step test.
 
 ### Comprehensive Test
+
 See [TESTING_GUIDE.md](TESTING_GUIDE.md) for full test plan covering:
+
 - Fresh installation
 - Book hash calculation
 - Session tracking (valid/invalid)
@@ -350,12 +375,14 @@ See [TESTING_GUIDE.md](TESTING_GUIDE.md) for full test plan covering:
 ## Development
 
 ### Requirements
+
 - Lua 5.1 / LuaJIT
 - KOReader 2023.10+ (or compatible version)
 - SQLite 3 (via lua-ljsqlite3)
 - Booklore server running
 
 ### File Structure
+
 ```
 booklore-koreader-plugin/
 ├── bookloresync.koplugin/     - Plugin code
@@ -381,12 +408,14 @@ booklore-koreader-plugin/
 ```
 
 ### Syntax Check
+
 ```bash
 cd bookloresync.koplugin
 luac -p *.lua
 ```
 
 ### Database Inspection
+
 ```bash
 sqlite3 ~/.config/koreader/settings/booklore-sync.sqlite
 
@@ -405,6 +434,7 @@ SELECT * FROM pending_sessions;
 ## Changes from Old Plugin
 
 ### Major Improvements
+
 - ✅ **SQLite Database** - Replaced LuaSettings with proper database
 - ✅ **Type Safety** - All SQLite cdata properly converted
 - ✅ **Offline Book ID Resolution** - Sessions with NULL book_id resolved during sync
@@ -416,6 +446,7 @@ SELECT * FROM pending_sessions;
 - ✅ **No Module Conflicts** - All modules prefixed with "booklore_"
 
 ### New Features
+
 - **Session Detection Mode** - Choose duration OR pages validation
 - **Minimum Pages Read** - Additional validation option
 - **Version Display** - Dedicated button showing version info
@@ -423,8 +454,10 @@ SELECT * FROM pending_sessions;
 - **Auto-Detect Book Type** - Supports EPUB, PDF, DJVU, CBZ, CBR
 - **Auto-Sync on Resume** - Background sync on device wake
 - **Update Book ID by Hash** - Cache updates when resolved
+- **Dynamic UI Progress Tracking** - Live progress updates for long-running sync and library scans
 
 ### Bug Fixes
+
 All SQLite binding errors and cdata type conversion issues resolved. See [TYPE_SAFETY_FIX.md](TYPE_SAFETY_FIX.md) for details.
 
 ---
@@ -432,6 +465,7 @@ All SQLite binding errors and cdata type conversion issues resolved. See [TYPE_S
 ## Version History
 
 ### 1.0.0-beta (February 11, 2026) - Current
+
 - Initial rewrite from old plugin
 - SQLite database implementation
 - Complete session tracking
@@ -448,7 +482,9 @@ See [VERSIONING.md](VERSIONING.md) for version strategy.
 ## Contributing
 
 ### Bug Reports
+
 When reporting bugs, please include:
+
 - KOReader version
 - Plugin version
 - Steps to reproduce
@@ -456,6 +492,7 @@ When reporting bugs, please include:
 - Database state (`SELECT * FROM pending_sessions;`)
 
 ### Feature Requests
+
 Feature requests welcome! Check [features.md](features.md) to see what's planned.
 
 ---
@@ -469,7 +506,7 @@ Feature requests welcome! Check [features.md](features.md) to see what's planned
 ## Links
 
 - **Booklore Server**: [Add Booklore repo link]
-- **KOReader**: https://github.com/koreader/koreader
+- **KOReader**: <https://github.com/koreader/koreader>
 - **Documentation**: See `docs/` folder
 
 ---
@@ -477,6 +514,7 @@ Feature requests welcome! Check [features.md](features.md) to see what's planned
 ## Support
 
 For help:
+
 1. Check [QUICK_START.md](QUICK_START.md) for testing guide
 2. Check [DEBUG_REFERENCE.md](DEBUG_REFERENCE.md) for debug commands
 3. Check [TESTING_GUIDE.md](TESTING_GUIDE.md) for comprehensive tests

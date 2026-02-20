@@ -659,12 +659,25 @@ function BookloreSync:syncFromBookloreShelf()
 
             -- Build set of IDs for bidirectional sync
             local shelf_book_ids = {}
-            for _, book in ipairs(books) do
+            local total_books = #books
+            for i, book in ipairs(books) do
                 local book_id = tonumber(book.id)
                 if book_id then
                     shelf_book_ids[book_id] = true
                     local filename = self:_generateFilename(book)
                     local filepath = download_dir .. "/" .. filename
+
+                    -- Update UI safely from AsyncTask thread
+                    UIManager:scheduleIn(0, function()
+                        if info_msg then
+                            if lfs.attributes(filepath, "mode") == "file" then
+                                info_msg.text = T(_("Skipping: %1 (%2 of %3)"), book.title or "Unknown", i, total_books)
+                            else
+                                info_msg.text = T(_("Downloading: %1 (%2 of %3)"), book.title or "Unknown", i, total_books)
+                            end
+                            UIManager:forceRePaint()
+                        end
+                    end)
 
                     if lfs.attributes(filepath, "mode") == "file" then
                         -- Update cache if needed
@@ -694,6 +707,15 @@ function BookloreSync:syncFromBookloreShelf()
                         local local_book_id = tonumber(book_id_match)
                         if local_book_id and not shelf_book_ids[local_book_id] then
                             local filepath = download_dir .. "/" .. file
+                            
+                            -- Safe UI update for deletion
+                            UIManager:scheduleIn(0, function()
+                                if info_msg then
+                                    info_msg.text = T(_("Deleting removed book (ID: %1)..."), local_book_id)
+                                    UIManager:forceRePaint()
+                                end
+                            end)
+                            
                             if os.remove(filepath) then
                                 deleted = deleted + 1
                             else
@@ -823,12 +845,19 @@ function BookloreSync:scanLibrary(silent)
 
             -- Process books from shelf and update cache
             local matched_count = 0
+            local total_books = #books
             for i, book in ipairs(books) do
                 self.scan_progress.current = i
-                -- We can't easily update UI text from inside the async thread 
-                -- if AsyncTask creates a separate process, but let's assume 
-                -- it works for progress tracking if it's a Lua thread/coroutine.
-                -- However, in KOReader AsyncTask often means a fork.
+                
+                -- Update UI safely from AsyncTask thread, throttled to every 20 books or at the end
+                if i % 20 == 0 or i == total_books then
+                    UIManager:scheduleIn(0, function()
+                        if info_msg then
+                            info_msg.text = T(_("Scanning Booklore library: %1 / %2 books processed..."), i, total_books)
+                            UIManager:forceRePaint()
+                        end
+                    end)
+                end
                 
                 if book.id and book.file_hash then
                     self.db:updateBookId(book.file_hash, tonumber(book.id))
