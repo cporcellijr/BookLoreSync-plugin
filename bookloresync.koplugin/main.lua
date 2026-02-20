@@ -367,10 +367,12 @@ end
 
 function BookloreSync:onSyncBooklorePending()
     local pending_count = self.db and self.db:getPendingSessionCount() or 0
-    if pending_count > 0 and self.is_enabled then
+    local pending_deletions = self.db and #self.db:getPendingDeletions() or 0
+    if (pending_count > 0 or pending_deletions > 0) and self.is_enabled then
         self:syncPendingSessions()
+        self:syncPendingDeletions()
     else
-        if pending_count == 0 then
+        if pending_count == 0 and pending_deletions == 0 then
             UIManager:show(InfoMessage:new{
                 text = _("No pending sessions to sync"),
                 timeout = 1,
@@ -1655,7 +1657,7 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id, from_
 
         if not book_id then
             self:logWarn("BookloreSync: notifyBookloreOnDeletion — book not found on server, skipping shelf removal")
-            return
+            return true
         end
 
         -- Step 2: get or create shelf by name
@@ -1712,13 +1714,16 @@ function BookloreSync:notifyBookloreOnDeletion(hash, stem, cached_book_id, from_
             self:logInfo("BookloreSync: notifyBookloreOnDeletion — queuing for retry")
             self.db:savePendingDeletion(hash, stem, cached_book_id)
         end
+        return false
     elseif not err then
         -- pcall succeeded but operation failed (err is the return value from pcall'd function)
         if not from_queue and self.db then
             self:logInfo("BookloreSync: notifyBookloreOnDeletion — operation failed, queuing for retry")
             self.db:savePendingDeletion(hash, stem, cached_book_id)
         end
+        return false
     end
+    return true
 end
 
 --[[--
@@ -2328,11 +2333,11 @@ function BookloreSync:syncPendingDeletions(silent)
         end
 
         -- Attempt the deletion with from_queue = true wrapped in pcall
-        local deletion_ok, deletion_err = pcall(function()
-            self:notifyBookloreOnDeletion(deletion.file_hash, deletion.stem, deletion.book_id, true)
+        local deletion_ok, api_success = pcall(function()
+            return self:notifyBookloreOnDeletion(deletion.file_hash, deletion.stem, deletion.book_id, true)
         end)
 
-        if deletion_ok then
+        if deletion_ok and api_success then
             -- Assume success - remove from queue
             self.db:removePendingDeletion(deletion.id)
             synced_count = synced_count + 1
