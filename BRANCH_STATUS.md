@@ -31,6 +31,8 @@
 - [x] Optimize File Logger I/O with persistent file handle
 - [x] Ensure proper lifecycle management for database and logger
 - [x] Implement Beta Fixes (Token Recovery, Safe UI Dispatch, Background Sync)
+- [x] Fix UI crash during library scan (parameter misalignment in AsyncTask)
+- [x] Fix async loop bug in batch upload fallback (`_submitSingleSession` synchronous)
 
 ## 3. CRITICAL FILE MAP
 
@@ -41,6 +43,7 @@
 
 ## 4. CHANGE LOG (Newest Top)
 
+- **2026-02-21**: [Antigravity] Fixed `scanLibrary` callback parameter mismatch to resolve crash. Made `_submitSingleSession` synchronous to prevent nested AsyncTask loops during batch fallback.
 - **2026-02-21**: [Antigravity] Fixed 403 Forbidden in submitSessionBatch by adding Bearer token and 401/403 retry logic.
 - **2026-02-20**: [Antigravity] Implemented safe UI dispatch in loginBooklore, 401/403 token recovery in API endpoints, and non-blocking background sync. Tested changes successfully.
 - **2026-02-20**: Implemented SQLite transaction wrapping and File Logger I/O optimization.

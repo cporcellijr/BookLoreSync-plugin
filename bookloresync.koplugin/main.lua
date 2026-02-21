@@ -912,7 +912,7 @@ function BookloreSync:scanLibrary(silent)
                 error(err_loop)
             end
             
-            return true, #books, matched_count
+            return #books, matched_count
         end)
     end,
     function(success, result_ok, total_found, matched_count)
@@ -3029,7 +3029,7 @@ function BookloreSync:_submitSingleSession(session)
     
     local duration_formatted = self:_formatDuration(session.duration_seconds or 0)
     
-    return self.api:submitSession({
+    local session_payload = {
         bookId = session.book_id,
         bookType = session.book_type,
         startTime = session.start_time,
@@ -3041,7 +3041,30 @@ function BookloreSync:_submitSingleSession(session)
         progressDelta = self:roundProgress(progress_delta),
         startLocation = session.start_location,
         endLocation = session.end_location,
-    })
+    }
+
+    local token_ok, token = self.api:getOrRefreshBearerToken()
+    if not token_ok then
+        return false, token or "Failed to get auth token", nil
+    end
+
+    local headers = {
+        ["Authorization"] = "Bearer " .. token,
+        ["Content-Type"] = "application/json"
+    }
+
+    local success, response, code = self.api:request("POST", "/api/v1/reading-sessions", session_payload, headers)
+    
+    -- 401/403 Token Recovery
+    if not success and (code == 401 or code == 403) then
+        token_ok, token = self.api:getOrRefreshBearerToken(true)
+        if token_ok then
+            headers["Authorization"] = "Bearer " .. token
+            success, response, code = self.api:request("POST", "/api/v1/reading-sessions", session_payload, headers)
+        end
+    end
+    
+    return success, response, code
 end
 
 --[[--
