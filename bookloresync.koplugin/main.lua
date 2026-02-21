@@ -406,6 +406,18 @@ function BookloreSync:onExit()
     end
 end
 
+function BookloreSync:onSuspend()
+    -- Flush and close logger handle to minimize wear and corruption risk
+    if self.file_logger then
+        self.file_logger:close()
+    end
+end
+
+function BookloreSync:onResume()
+    -- The logger will automatically re-open the handle on the next write() call
+    self:logInfo("BookloreSync: Plugin resumed")
+end
+
 function BookloreSync:registerDispatcherActions()
     -- Register Toggle Sync action
     Dispatcher:registerAction("booklore_toggle_sync", {
@@ -602,7 +614,9 @@ function BookloreSync:_detectDefaultDownloadDir()
     end
 end
 
-function BookloreSync:syncFromBookloreShelf()
+function BookloreSync:syncFromBookloreShelf(silent)
+    if silent == nil then silent = (self.ui and self.ui.document and true or false) end
+
     -- Task 1: Check if a sync is already in progress
     if self.sync_in_progress then
         self:logWarn("BookloreSync: Sync already in progress, skipping duplicate call")
@@ -612,19 +626,24 @@ function BookloreSync:syncFromBookloreShelf()
     -- Check if Booklore credentials are configured
     if not self.booklore_username or self.booklore_username == "" or
        not self.booklore_password or self.booklore_password == "" then
-        UIManager:show(InfoMessage:new{
-            text = _("Booklore credentials not configured. Please configure your Booklore account first."),
-            timeout = 3,
-        })
+        if not silent and not self.silent_messages then
+            UIManager:show(InfoMessage:new{
+                text = _("Booklore credentials not configured. Please configure your Booklore account first."),
+                timeout = 3,
+            })
+        end
         return false, _("Credentials not configured")
     end
 
     self.sync_in_progress = true
-    local info_msg = InfoMessage:new{
-        text = _("Syncing books from Booklore shelf..."),
-        timeout = 0,
-    }
-    UIManager:show(info_msg)
+    local info_msg
+    if not silent and not self.silent_messages then
+        info_msg = InfoMessage:new{
+            text = _("Syncing books from Booklore shelf..."),
+            timeout = 0,
+        }
+        UIManager:show(info_msg)
+    end
 
     self:logInfo("BookloreSync: syncFromBookloreShelf — starting AsyncTask sync")
 
@@ -657,51 +676,87 @@ function BookloreSync:syncFromBookloreShelf()
             local deleted = 0
             local errors = 0
 
-            -- Build set of IDs for bidirectional sync
-            local shelf_book_ids = {}
-            for _, book in ipairs(books) do
-                local book_id = tonumber(book.id)
-                if book_id then
-                    shelf_book_ids[book_id] = true
-                    local filename = self:_generateFilename(book)
-                    local filepath = download_dir .. "/" .. filename
+            self.db:beginTransaction()
+            local ok, err = pcall(function()
+                -- Build set of IDs for bidirectional sync
+                local shelf_book_ids = {}
+                local total_books = #books
+                for i, book in ipairs(books) do
+                    local book_id = tonumber(book.id)
+                    if book_id then
+                        shelf_book_ids[book_id] = true
+                        local filename = self:_generateFilename(book)
+                        local filepath = download_dir .. "/" .. filename
 
-                    if lfs.attributes(filepath, "mode") == "file" then
-                        -- Update cache if needed
-                        local hash = self:calculateBookHash(filepath)
-                        self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
-                        skipped = skipped + 1
-                    else
-                        -- Download
-                        local dl_ok, dl_err = self.api:downloadBook(book_id, filepath, self.booklore_username, self.booklore_password)
-                        if dl_ok then
-                            local hash = self:calculateBookHash(filepath)
-                            self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
-                            downloaded = downloaded + 1
+                        -- Update UI safely from AsyncTask thread
+                        UIManager:scheduleIn(0, function()
+                            if info_msg then
+                                if lfs.attributes(filepath, "mode") == "file" then
+                                    info_msg.text = T(_("Skipping: %1 (%2 of %3)"), book.title or "Unknown", i, total_books)
+                                else
+                                    info_msg.text = T(_("Downloading: %1 (%2 of %3)"), book.title or "Unknown", i, total_books)
+                                end
+                                UIManager:forceRePaint()
+                            end
+                        end)
+
+                        if lfs.attributes(filepath, "mode") == "file" then
+                            -- Update cache if needed
+                            local existing_book = self.db:getBookByFilePath(filepath)
+                            if not existing_book then
+                                local hash = self:calculateBookHash(filepath)
+                                self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
+                            end
+                            skipped = skipped + 1
                         else
-                            errors = errors + 1
-                            self:logWarn("BookloreSync: Failed to download book:", book.title, dl_err)
-                        end
-                    end
-                end
-            end
-
-            -- Bidirectional sync: Remove local books not in shelf
-            if self.delete_removed_shelf_books then
-                for file in lfs.dir(download_dir) do
-                    local book_id_match = file:match("^BookID_(%d+)%.epub$")
-                    if book_id_match then
-                        local local_book_id = tonumber(book_id_match)
-                        if local_book_id and not shelf_book_ids[local_book_id] then
-                            local filepath = download_dir .. "/" .. file
-                            if os.remove(filepath) then
-                                deleted = deleted + 1
+                            -- Download
+                            local dl_ok, dl_err = self.api:downloadBook(book_id, filepath, self.booklore_username, self.booklore_password)
+                            if dl_ok then
+                                local hash = self:calculateBookHash(filepath)
+                                self.db:saveBookCache(filepath, hash, book_id, book.title, book.author, book.isbn10, book.isbn13)
+                                downloaded = downloaded + 1
                             else
                                 errors = errors + 1
+                                self:logWarn("BookloreSync: Failed to download book:", book.title, dl_err)
                             end
                         end
                     end
                 end
+
+                -- Bidirectional sync: Remove local books not in shelf
+                if self.delete_removed_shelf_books then
+                    for file in lfs.dir(download_dir) do
+                        local book_id_match = file:match("^BookID_(%d+)%.epub$")
+                        if book_id_match then
+                            local local_book_id = tonumber(book_id_match)
+                            if local_book_id and not shelf_book_ids[local_book_id] then
+                                local filepath = download_dir .. "/" .. file
+                                
+                                -- Safe UI update for deletion
+                                UIManager:scheduleIn(0, function()
+                                    if info_msg then
+                                        info_msg.text = T(_("Deleting removed book (ID: %1)..."), local_book_id)
+                                        UIManager:forceRePaint()
+                                    end
+                                end)
+                                
+                                if os.remove(filepath) then
+                                    deleted = deleted + 1
+                                else
+                                    errors = errors + 1
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+
+            if ok then
+                self.db:commit()
+            else
+                self.db:rollback()
+                self:logErr("BookloreSync: Error during shelf sync loop, rolled back:", err)
+                error(err)
             end
             
             return true, T(_("Sync complete!\n\nDownloaded: %1\nSkipped: %2\nDeleted: %3\nErrors: %4"), 
@@ -710,13 +765,15 @@ function BookloreSync:syncFromBookloreShelf()
     end,
     function(success, result_ok, result)
         -- Callback on UI thread
-        UIManager:close(info_msg)
+        if info_msg then UIManager:close(info_msg) end
         self.sync_in_progress = false
 
         local final_success = success and result_ok
         local final_msg = final_success and result or (T(_("Sync failed: %1"), result or "Unknown error"))
         
-        UIManager:show(InfoMessage:new{ text = final_msg, timeout = 5 })
+        if not silent and not self.silent_messages then
+            UIManager:show(InfoMessage:new{ text = final_msg, timeout = 5 })
+        end
         
         if final_success then
             local FileManager = require("apps/filemanager/filemanager")
@@ -823,17 +880,36 @@ function BookloreSync:scanLibrary(silent)
 
             -- Process books from shelf and update cache
             local matched_count = 0
-            for i, book in ipairs(books) do
-                self.scan_progress.current = i
-                -- We can't easily update UI text from inside the async thread 
-                -- if AsyncTask creates a separate process, but let's assume 
-                -- it works for progress tracking if it's a Lua thread/coroutine.
-                -- However, in KOReader AsyncTask often means a fork.
-                
-                if book.id and book.file_hash then
-                    self.db:updateBookId(book.file_hash, tonumber(book.id))
-                    matched_count = matched_count + 1
+            local total_books = #books
+            
+            self.db:beginTransaction()
+            local ok_loop, err_loop = pcall(function()
+                for i, book in ipairs(books) do
+                    self.scan_progress.current = i
+                    
+                    -- Update UI safely from AsyncTask thread, throttled to every 20 books or at the end
+                    if i % 20 == 0 or i == total_books then
+                        UIManager:scheduleIn(0, function()
+                            if info_msg then
+                                info_msg.text = T(_("Scanning Booklore library: %1 / %2 books processed..."), i, total_books)
+                                UIManager:forceRePaint()
+                            end
+                        end)
+                    end
+                    
+                    if book.id and book.file_hash then
+                        self.db:updateBookId(book.file_hash, tonumber(book.id))
+                        matched_count = matched_count + 1
+                    end
                 end
+            end)
+
+            if ok_loop then
+                self.db:commit()
+            else
+                self.db:rollback()
+                self:logErr("BookloreSync: Error during library scan loop, rolled back:", err_loop)
+                error(err_loop)
             end
             
             return true, #books, matched_count
@@ -2146,7 +2222,7 @@ function BookloreSync:onResume()
 end
 
 function BookloreSync:syncPendingSessions(silent)
-    silent = silent or false
+    if silent == nil then silent = (self.ui and self.ui.document and true or false) end
     
     if self.sync_in_progress then
         self:logWarn("BookloreSync: Sync already in progress, skipping pending sessions sync")
@@ -2175,12 +2251,6 @@ function BookloreSync:syncPendingSessions(silent)
         UIManager:show(info_msg)
     end
     
-    local info_msg = InfoMessage:new{
-        text = _("Syncing pending sessions..."),
-        timeout = 0,
-    }
-    UIManager:show(info_msg)
-    
     AsyncTask:new(function()
         -- Update API client with current credentials
         self.api:init(self.server_url, self.username, self.password, self.db, self.secure_logs)
@@ -2191,7 +2261,7 @@ function BookloreSync:syncPendingSessions(silent)
         
         local function syncSession(i)
             if i > #sessions then
-                UIManager:close(info_msg)
+                if info_msg then UIManager:close(info_msg) end
                 self.sync_in_progress = false
                 if not silent and not self.silent_messages then
                     local message = ""
@@ -2291,7 +2361,7 @@ Skips items with retry_count > 10 to prevent infinite accumulation.
 @param silent boolean Don't show UI messages if true
 --]]
 function BookloreSync:syncPendingDeletions(silent)
-    silent = silent or false
+    if silent == nil then silent = (self.ui and self.ui.document and true or false) end
     
     if self.sync_in_progress then
         self:logWarn("BookloreSync: Sync already in progress, skipping pending deletions sync")
@@ -2397,7 +2467,7 @@ Queries the server for books cached while offline
 @param silent boolean Don't show UI messages if true
 --]]
 function BookloreSync:resolveUnmatchedBooks(silent)
-    silent = silent or false
+    if silent == nil then silent = (self.ui and self.ui.document and true or false) end
     
     if self.sync_in_progress then
         self:logWarn("BookloreSync: Sync already in progress, skipping resolveUnmatchedBooks")

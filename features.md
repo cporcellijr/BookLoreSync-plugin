@@ -1,12 +1,13 @@
 # Booklore KOReader Plugin - Feature List
 
-**Last Updated:** February 11, 2026  
+**Last Updated:** February 21, 2026  
 **Plugin Version:** 1.0.0-beta  
 **Status:** Ready for Testing
 
 This document tracks all features from the old plugin and their implementation status in the new plugin.
 
 ## Legend
+
 - ✅ **Fully Implemented** - Feature is complete and working
 - 🚧 **Partially Implemented** - Feature exists but not fully functional
 - ❌ **Not Implemented** - Feature not yet added to new plugin
@@ -16,6 +17,7 @@ This document tracks all features from the old plugin and their implementation s
 ## Core Features
 
 ### Authentication & Connection
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Server URL configuration | ✅ | `booklore_settings.lua:17-56` | |
@@ -25,6 +27,7 @@ This document tracks all features from the old plugin and their implementation s
 | MD5 password hashing | ✅ | `booklore_api_client.lua:145` | |
 
 ### Session Tracking
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Automatic session start on document open | ✅ | `main.lua:843-891`, `main.lua:1026-1029` | `onReaderReady` handler |
@@ -41,6 +44,7 @@ This document tracks all features from the old plugin and their implementation s
 | Detect book type from file extension | ✅ | `main.lua:653-666` | Supports EPUB, PDF, DJVU, CBZ, CBR |
 
 ### Session Validation
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Minimum session duration (seconds) | ✅ | `main.lua:574-594`, `booklore_settings.lua:139-181` | Fully integrated |
@@ -49,6 +53,7 @@ This document tracks all features from the old plugin and their implementation s
 | Skip sessions with no progress | ✅ | `main.lua:588-590` | Fully integrated |
 
 ### Offline Support
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Queue sessions when offline | ✅ | `booklore_database.lua:508-557`, `main.lua:966-977` | Database support + session end integration |
@@ -63,6 +68,7 @@ This document tracks all features from the old plugin and their implementation s
 | Book ID resolution during sync | ✅ | `main.lua:1110-1146` | Resolves NULL book_id from server |
 
 ### Cache Management
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Book hash to ID mapping cache | ✅ | `booklore_database.lua:278-342` | SQLite-based cache |
@@ -73,32 +79,17 @@ This document tracks all features from the old plugin and their implementation s
 | Update book ID by hash | ✅ | `booklore_database.lua:444-463` | For resolving offline sessions |
 
 ### Sync Options
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Manual sync only mode | ✅ | `main.lua:206-227`, `main.lua:392-399` | Fully integrated |
-| Force push on suspend | 🚧 | `main.lua:402-422` | Setting exists, behavior deferred |
-| Connect network on suspend | 🚧 | `main.lua:425-438` | Setting exists, behavior deferred |
-| Silent messages mode | ✅ | `booklore_settings.lua:305-320` | |
-
-### Network Management
-| Feature | Status | Location (New) | Notes |
-|---------|--------|---------------|-------|
-| Enable WiFi on suspend | ❌ | - | Deferred - Old: `old/main.lua:404-441` |
-| Wait for network (15s timeout) | ❌ | - | Deferred - Old: `old/main.lua:423-440` |
-| Quick network connectivity check | ✅ | `booklore_api_client.lua:317-331` | Via health check endpoint |
-
-### Historical Data
-| Feature | Status | Location (New) | Notes |
-|---------|--------|---------------|-------|
-| Sync from statistics.sqlite3 | 🚧 | `main.lua:589-624` | Placeholder only - deferred for post-launch |
-| Group page stats into sessions | ❌ | - | Deferred - Old: `old/main.lua:1194-1235` |
-| Session timeout detection (5 min) | ❌ | - | Deferred - Old: `old/main.lua:1196` |
-| Historical sync acknowledgment | ✅ | `main.lua:597-616` | Warning dialog |
-| Match historical data | 🚧 | `main.lua:626-631` | Placeholder only |
-| View match statistics | ✅ | `main.lua:633-653` | |
-| Match history database | ✅ | `booklore_database.lua:660-702` | Schema ready |
+| Quiet mode | ✅ | `booklore_settings.lua` | Suppress non-critical messages |
+| Auto-sync from shelf | ✅ | `main.lua` | Automatically download missing books |
+| Bidirectional shelf sync | ✅ | `main.lua` | Delete local books when removed from remote shelf |
+| Interactive Shelf Picker | ✅ | `booklore_settings.lua` | Browse and choose Booklore shelves from within KOReader |
 
 ### Dispatcher Integration
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Toggle sync action | ✅ | `main.lua:132-138`, `main.lua:166-169` | |
@@ -107,6 +98,7 @@ This document tracks all features from the old plugin and their implementation s
 | Test connection action | ✅ | `main.lua:156-163`, `main.lua:186-189` | |
 
 ### Settings & Configuration
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Enable/disable sync | ✅ | `booklore_settings.lua:273-287` | |
@@ -120,41 +112,18 @@ This document tracks all features from the old plugin and their implementation s
 | Version display button | ✅ | `booklore_settings.lua:271-285`, `booklore_settings.lua:377-383` | New feature |
 
 ### Menu Structure
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Main "Booklore Sync" menu | ✅ | `main.lua:229-479` | Complete menu structure |
 | Login submenu | ✅ | `booklore_settings.lua:338-375` | |
 | Session Management submenu | ✅ | `main.lua:233-385` | Enhanced with detection mode |
 | Sync Options submenu | ✅ | `main.lua:388-441` | |
-| Historical Data submenu | ✅ | `main.lua:444-475` | New submenu structure |
 | About & Updates submenu | ✅ | `main.lua:545-588` | New feature (Feb 15, 2026) |
 | Version button in settings | ✅ | `booklore_settings.lua:377-383` | New feature with version info |
 
-### Auto-Update System (NEW - Feb 15, 2026)
-| Feature | Status | Location (New) | Notes |
-|---------|--------|---------------|-------|
-| GitHub API integration | ✅ | `booklore_updater.lua:236-287` | Fetches latest release |
-| Semantic version parsing | ✅ | `booklore_updater.lua:96-125` | Handles vX.Y.Z format |
-| Version comparison logic | ✅ | `booklore_updater.lua:127-161` | Dev versions always update |
-| Auto-check on startup | ✅ | `main.lua:152-159`, `main.lua:2894-2941` | Once per day, 5-second delay |
-| Manual update check | ✅ | `main.lua:2943-3015` | Via menu action |
-| Download with progress | ✅ | `booklore_updater.lua:394-449` | Shows percentage |
-| Automatic backup | ✅ | `booklore_updater.lua:499-521` | Before installation |
-| Atomic installation | ✅ | `booklore_updater.lua:523-583` | Safe replacement |
-| Rollback support | ✅ | `booklore_updater.lua:585-619`, `main.lua:3096-3118` | Restore from backup |
-| Cache release info (1hr) | ✅ | `booklore_updater.lua:289-320`, `booklore_database.lua:1608-1689` | Reduce API calls |
-| Backup retention (3 latest) | ✅ | `booklore_updater.lua:639-664` | Auto-cleanup old backups |
-| Download size display | ✅ | `booklore_updater.lua:380-392` | Human-readable format |
-| Changelog preview | ✅ | `main.lua:2976-2979` | Shows in update dialog |
-| Restart prompt | ✅ | `main.lua:3080-3090` | UIManager:askForRestart() |
-| Network check before update | ✅ | `main.lua:2949-2956` | NetworkMgr integration |
-| Update available badge | ✅ | `main.lua:548`, `main.lua:560` | Menu shows ⚠ |
-| Toggle auto-check setting | ✅ | `main.lua:3120-3132` | Enable/disable |
-| Clear update cache | ✅ | `main.lua:3134-3143` | Force fresh check |
-| Version info display | ✅ | `main.lua:2862-2892` | Current version details |
-| updater_cache database table | ✅ | `booklore_database.lua:213-220` | Migration 8 |
-
 ### API Communication
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | GET /api/koreader/users/auth | ✅ | `booklore_api_client.lua:238-262` | Authentication endpoint |
@@ -166,8 +135,11 @@ This document tracks all features from the old plugin and their implementation s
 | JSON request encoding | ✅ | `booklore_api_client.lua:156` | Using cjson |
 | JSON response parsing | ✅ | `booklore_api_client.lua:52-64` | With error handling |
 | Error message extraction | ✅ | `booklore_api_client.lua:79-117` | Enhanced error messages |
+| Safe UI Dispatching | ✅ | `booklore_api_client.lua` | Prevents API failures from crashing plugin |
+| Automatic Token Recovery | ✅ | `booklore_api_client.lua` | On-the-fly 401/403 recovery |
 
 ### Database (SQLite)
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | Schema versioning | ✅ | `booklore_database.lua:14`, `booklore_database.lua:146-182` | Current version: 1 |
@@ -189,8 +161,10 @@ This document tracks all features from the old plugin and their implementation s
 | Clear book cache | ✅ | `booklore_database.lua:491-497` | Truncate table |
 | Clear pending sessions | ✅ | `booklore_database.lua:617-621` | Truncate table |
 | Increment retry count | ✅ | `booklore_database.lua:640-658` | For failed syncs |
+| SQLite Transactions | ✅ | `booklore_database.lua` | Fast bulk operations |
 
 ### Logging
+
 | Feature | Status | Location (New) | Notes |
 |---------|--------|---------------|-------|
 | File logging toggle | 🚧 | `booklore_settings.lua:289-304` | UI exists, deferred |
@@ -203,6 +177,7 @@ This document tracks all features from the old plugin and their implementation s
 ## Bug Fixes Applied (Feb 11, 2026)
 
 ### Critical Fixes
+
 | Issue | Status | Location | Description |
 |-------|--------|----------|-------------|
 | SQLite bind() API errors | ✅ | All database queries | Fixed bind1/bind2/bind3 → bind(val1, val2, ...) |
@@ -213,90 +188,41 @@ This document tracks all features from the old plugin and their implementation s
 
 ---
 
-## Summary Statistics
+### Category Accuracy
 
-### Feature Completion
-- **Total Features Tracked**: 119 core features (includes 20 new auto-update features)
-- **Fully Implemented**: 105 (88.2%)
-- **Partially Implemented**: 6 (5.0%)
-- **Not Implemented**: 8 (6.7%)
-
-### Status Breakdown by Category
-| Category | Complete | Partial | Missing | Total | % Done |
-|----------|----------|---------|---------|-------|--------|
-| Authentication & Connection | 5 | 0 | 0 | 5 | 100% |
-| Session Tracking | 12 | 0 | 0 | 12 | 100% |
-| Session Validation | 4 | 0 | 0 | 4 | 100% |
-| Offline Support | 10 | 0 | 0 | 10 | 100% |
-| Cache Management | 6 | 0 | 0 | 6 | 100% |
-| Sync Options | 2 | 2 | 0 | 4 | 50% |
-| Network Management | 1 | 0 | 2 | 3 | 33% |
-| Historical Data | 3 | 2 | 2 | 7 | 43% |
-| Dispatcher Integration | 4 | 0 | 0 | 4 | 100% |
-| Settings & Configuration | 8 | 1 | 0 | 9 | 89% |
-| Menu Structure | 7 | 0 | 0 | 7 | 100% |
-| Auto-Update System | 20 | 0 | 0 | 20 | 100% |
-| API Communication | 9 | 0 | 0 | 9 | 100% |
-| Database (SQLite) | 21 | 0 | 0 | 21 | 100% |
-| Logging | 1 | 1 | 2 | 4 | 25% |
-
-### Deferred Features (Post-Launch)
-The following features are intentionally deferred and not critical for core functionality:
-
-1. **Historical data sync** - Can be ported from old plugin later
-   - Location: `old/main.lua:1059-1356`
-   - Complexity: High (requires statistics.sqlite3 parsing)
-   - Priority: Low
-
-2. **Network management on suspend** - WiFi enable/wait logic
-   - Location: `old/main.lua:404-441`
-   - Complexity: Medium (device-specific APIs)
-   - Priority: Medium
-
-3. **Custom file logging** - Write to dedicated log file
-   - Location: `old/main.lua:46-89`
-   - Complexity: Low
-   - Priority: Low
-
-4. **Force push/connect on suspend behaviors** - UI exists but handlers not implemented
-   - Complexity: Medium
-   - Priority: Low
+All deprecated capabilities and legacy network management hacks have been thoroughly stripped out to keep Booklore Sync lean, atomic, and crash-resistant. The remaining functionality serves the single purpose of seamlessly extracting KOReader progress tracking data and pushing it securely to Booklore servers.
 
 ---
 
 ### New Features Added (Not in Old Plugin)
-1. **Session detection mode** - Choose between duration-based or pages-based validation
-2. **Minimum pages read** - Additional validation option beyond just duration
-3. **Match history tracking** - Database table for manual matching of historical data
-4. **Version button** - Dedicated button in settings to display version info
-5. **Enhanced error handling** - Better error messages and extraction in API client
-6. **SQLite database** - More robust than LuaSettings with proper schema versioning
-7. **Database migrations** - Schema versioning system for future updates
-8. **Formatted duration display** - Human-readable duration format (e.g., "1h 5m 9s")
-9. **Auto-detect book type** - Supports EPUB, PDF, DJVU, CBZ, CBR
-10. **Auto-sync on resume** - Background sync when device wakes up from suspend
-11. **Auto-sync after session** - Optionally sync immediately after session ends
-12. **Book ID resolution during sync** - Resolves NULL book_id for offline sessions
-13. **Type-safe database operations** - All cdata converted to proper Lua types
-14. **Atomic upsert operations** - INSERT OR REPLACE for better data consistency
-15. **Retry tracking per session** - Track failed sync attempts per session
-16. **Update book ID by hash** - Update cached book_id when resolved from server
-17. **Auto-updater system** - Self-updating plugin from GitHub releases (Feb 15, 2026)
-18. **Semantic versioning** - Proper version comparison and parsing
-19. **Automatic backups** - Creates backup before each update
-20. **Rollback support** - Restore previous version if update fails
-21. **Update notifications** - Badge indicators and startup notifications
-22. **Download progress** - Real-time progress during update downloads
+
+1. **Background/Silent Syncing** - Operations are fundamentally non-blocking and silent when a book is open.
+2. **Token Recovery & Stability** - Automatic 401/403 recovery prevents thread crashes.
+3. **Dynamic UI Progress Tracking** - Custom InfoMessage boxes update with changing text when parsing long databases.
+4. **Two-Way Shelf Synchronization** - Download missing books from your Booklore shelf and natively remove local books when they are un-shelved online.
+5. **Interactive Shelf Picker** - Select your Booklore shelf through a clean native KOReader list UI instead of typing IDs.
+6. **Session detection mode** - Choose between duration-based or pages-based validation
+7. **Minimum pages read** - Additional validation option beyond just duration
+8. **SQLite database** - More robust than LuaSettings with proper schema versioning
+9. **Database migrations** - Schema versioning system for future updates
+10. **Formatted duration display** - Human-readable duration format (e.g., "1h 5m 9s")
+11. **Auto-sync on resume** - Background sync when device wakes up from suspend
+12. **Auto-sync after session** - Optionally sync immediately after session ends
+13. **Book ID resolution during sync** - Resolves NULL book_id for offline sessions
+14. **Type-safe database operations** - All cdata converted to proper Lua types
+15. **Atomic upsert operations** - INSERT OR REPLACE for better data consistency
+16. **Retry tracking per session** - Track failed sync attempts per session
+17. **Update book ID by hash** - Update cached book_id when resolved from server
 
 ### Improvements Over Old Plugin
+
+- ✅ **Two-Way Library Sync** - The plugin isn't just for reading progress anymore; it keeps your physical EPUB files perfectly mirrored with your remote Booklore shelf!
 - ✅ **Better offline support** - Sessions queue with NULL book_id, resolved during sync
 - ✅ **Type safety** - All SQLite cdata properly converted to Lua types
 - ✅ **Better error handling** - Enhanced API error extraction and user messages
 - ✅ **Atomic operations** - INSERT OR REPLACE instead of UPDATE then INSERT
 - ✅ **Schema versioning** - Proper migration framework for future updates
-- ✅ **Code organization** - Separated modules (booklore_settings, booklore_database, booklore_api_client, booklore_updater)
-- ✅ **Self-updating** - No manual file management needed, updates from GitHub automatically
-- ✅ **Safe updates** - Automatic backups and rollback support
+- ✅ **Code organization** - Separated modules (booklore_settings, booklore_database, booklore_api_client)
 - ✅ **Version awareness** - Clear version tracking and comparison
 - ✅ **More validation options** - Duration AND/OR pages-based validation
 - ✅ **Better caching** - SQLite with indexes instead of LuaSettings
@@ -308,6 +234,7 @@ The following features are intentionally deferred and not critical for core func
 ## Testing Status
 
 ### Current State
+
 - ✅ All Lua syntax valid (verified with luac)
 - ✅ All SQLite binding errors fixed
 - ✅ All cdata type conversions in place
@@ -316,6 +243,7 @@ The following features are intentionally deferred and not critical for core func
 - ⏳ Requires KOReader restart to load fixes
 
 ### Next Steps
+
 1. **Copy plugin to KOReader** - See `QUICK_START.md`
 2. **Restart KOReader completely** - Critical for loading fixes
 3. **Run 5-minute quick test** - See `QUICK_START.md`
@@ -323,6 +251,7 @@ The following features are intentionally deferred and not critical for core func
 5. **Report results** - Document any issues found
 
 ### Documentation
+
 - ✅ `QUICK_START.md` - 5-minute test checklist
 - ✅ `TESTING_GUIDE.md` - Comprehensive test plan (7 phases)
 - ✅ `DEBUG_REFERENCE.md` - Debug commands and SQL queries
@@ -337,7 +266,8 @@ The following features are intentionally deferred and not critical for core func
 
 ## Implementation Checklist
 
-### ✅ Completed (85.9%)
+### ✅ Completed
+
 - [x] Core session tracking (onReaderReady, onCloseDocument, onSuspend, onResume)
 - [x] Book hash calculation (sample-based MD5)
 - [x] Session data collection (progress, location, duration)
@@ -354,51 +284,38 @@ The following features are intentionally deferred and not critical for core func
 - [x] Dispatcher integration (all actions)
 - [x] Type-safe database operations
 - [x] Error handling and user feedback
-- [x] Progress rounding helper
-- [x] Duration formatting helper
+- [x] File Logging and Persistent Handles
+- [x] SQLite Transactions
+- [x] Complete Background AsyncTask compatibility
+- [x] Dynamic Progress Modals
+- [x] Safe API Callbacks
+- [x] Token Auto-Recovery
 
-### 🚧 Partially Implemented (6.1%)
-- [~] Force push on suspend (UI exists, behavior deferred)
-- [~] Connect network on suspend (UI exists, behavior deferred)
-- [~] Historical data sync (UI exists, implementation deferred)
-- [~] Match historical data (placeholder only)
-- [~] Log to file (UI exists, implementation deferred)
+### ❌ Stripped
 
-### ❌ Deferred for Post-Launch (8.1%)
 - [ ] WiFi enable/wait on suspend
 - [ ] Network timeout management
 - [ ] Historical session grouping
 - [ ] Statistics.sqlite3 parsing
-- [ ] Custom log file writing
-- [ ] Log rotation
 
 ---
 
 ## Ready for Production?
 
 ### Core Functionality: ✅ YES
-The plugin is **ready for production use** for its core purpose:
-- ✅ Track reading sessions automatically
-- ✅ Sync sessions to Booklore server
-- ✅ Work offline with queue and retry
-- ✅ Handle book hash calculation and caching
-- ✅ Resolve book IDs from server
-- ✅ Validate sessions before saving
-- ✅ User-friendly settings and menus
 
-### Advanced Features: ⏳ Post-Launch
-Some advanced features are intentionally deferred:
-- Historical data import from statistics.sqlite3
-- Automatic WiFi management
-- Custom log file writing
+The plugin is **ready for production use**. It is stable, background-capable, handles disconnects safely, limits disk I/O efficiently, and integrates fully into the standard KOReader lifecycle.
 
-These can be added in future updates based on user feedback and priority.
+### Scope Control
+
+We have intentionally limited the scope to extracting progress from KOReader and interacting with Booklore. Complex hardware tasks such as waking Wi-Fi networks prior to a sync are deferred to the host OS rather than attempted using potentially incompatible Lua hardware functions.
 
 ---
 
 ## Support & Troubleshooting
 
 For testing help:
+
 1. **Quick Start**: See `QUICK_START.md` for 5-minute test
 2. **Debug Help**: See `DEBUG_REFERENCE.md` for commands and queries
 3. **Full Tests**: See `TESTING_GUIDE.md` for comprehensive plan

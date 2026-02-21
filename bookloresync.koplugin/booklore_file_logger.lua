@@ -51,6 +51,9 @@ function FileLogger:init()
     test_file:close()
     os.remove(self.log_dir .. "/.test")
     
+    self.current_log_file = nil
+    self.current_date = nil
+    
     logger.info("BookloreSync FileLogger: Initialized, log directory:", self.log_dir)
     return true
 end
@@ -134,46 +137,23 @@ function FileLogger:write(level, ...)
     if current_date ~= self.current_date then
         -- Close the current log file if open
         if self.current_log_file then
-            self.current_log_file:close()
-            self.current_log_file = nil
+            self:close() -- This flushes and closes handle
         end
         
         self.current_date = current_date
-        
-        -- Flush any remaining buffered logs before rotating
-        self:flushBuffer()
         
         -- Rotate old logs
         self:rotateLogs()
     end
     
-    -- Check if current file exceeds size limit
+    -- Check if current file exceeds size limit (checked periodically by write)
     if self.current_log_file then
         local current_size = self:getCurrentLogSize()
         if current_size >= self.max_size then
             logger.info("BookloreSync FileLogger: File size limit reached (" .. current_size .. "), rotating")
-            self:flushBuffer()
-            if self.current_log_file then
-                self.current_log_file:close()
-                self.current_log_file = nil
-            end
+            self:close()
             self:rotateLogs()
         end
-    end
-    
-    -- Open log file if not already open
-    if not self.current_log_file then
-        local log_path = self:getLogFilePath(current_date)
-        self.current_log_file = io.open(log_path, "a")
-        
-        if not self.current_log_file then
-            logger.err("BookloreSync FileLogger: Failed to open log file:", log_path)
-            return false
-        end
-        
-        -- Write header for new file
-        self.current_log_file:write("=== Booklore Sync Log - " .. current_date .. " ===\n")
-        self.current_log_file:flush()
     end
     
     -- Format the log message
@@ -203,8 +183,28 @@ end
 Flush the log buffer to disk
 --]]
 function FileLogger:flushBuffer()
-    if not self.current_log_file or #self.buffer == 0 then
+    if #self.buffer == 0 then
         return
+    end
+
+    -- Open log file if not already open
+    if not self.current_log_file then
+        local log_path = self:getLogFilePath(self.current_date)
+        local is_new_file = not io.open(log_path, "r")
+        
+        self.current_log_file = io.open(log_path, "a")
+        
+        if not self.current_log_file then
+            logger.err("BookloreSync FileLogger: Failed to open log file:", log_path)
+            -- If we can't open the file, we can't flush, but we should clear buffer to avoid memory bloat
+            self.buffer = {}
+            return false
+        end
+        
+        if is_new_file then
+            -- Write header for new file
+            self.current_log_file:write("=== Booklore Sync Log - " .. (self.current_date or self:getCurrentDate()) .. " ===\n")
+        end
     end
     
     for _, entry in ipairs(self.buffer) do
@@ -215,13 +215,13 @@ function FileLogger:flushBuffer()
 end
 
 --[[--
-Close the current log file
+Close the current log file and flush buffer
 
-Should be called when the plugin is exiting.
+Should be called when the plugin is exiting or suspending.
 --]]
 function FileLogger:close()
+    self:flushBuffer()
     if self.current_log_file then
-        self:flushBuffer()
         self.current_log_file:close()
         self.current_log_file = nil
         logger.info("BookloreSync FileLogger: Closed log file")

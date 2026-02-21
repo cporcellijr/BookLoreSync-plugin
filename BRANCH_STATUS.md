@@ -1,32 +1,46 @@
-# BRANCH STATUS: Fix AsyncTask Fallback
+# BRANCH STATUS: Dynamic UI Progress & Performance Optimizations
 
 ## 1. BRANCH CONTEXT / DEEP DIVE
-*(Generated at branch start. Source of truth for architectural context.)*
-
-*(Generated at branch start. Source of truth for architectural context.)*
 
 ### 1.1 Architecture & Core Components
-- **Entry Points**: `main.lua` and `booklore_api_client.lua`
-- **Dependencies**: KOReader `ui/task` module
+
+- **Entry Points**: `main.lua`
+- **Modules**: `booklore_database.lua`, `booklore_file_logger.lua`
+- **Dependencies**: KOReader `ui/uimanager`, `sqlite3`
 
 ### 1.2 Database & Data Structure
-- **Key Tables/Models**: None for this fix.
-- **Critical Fields**: None for this fix.
+
+- **Transactions**: Implemented `BEGIN TRANSACTION`/`COMMIT` wrappers for bulk `INSERT`/`UPDATE` operations in the book cache and historical sessions.
 
 ### 1.3 Key Workflows
-- **AsyncTask Execution**: Replaces the synchronous UI fallback with a correctly formatted fallback that exposes a `submit` method, ensuring all `AsyncTask:new()` calls are chainable with `:submit()`.
+
+- **Dynamic Progress**: Real-time feedback in `syncFromBookloreShelf()` and `scanLibrary()`.
+- **Logger Lifecycle**: `onSuspend` and `onExit` ensure proper file handle closure to minimize flash storage wear.
 
 ### 1.4 Known Issues
-- **AsyncTask Crashes**: Falling back to `{}` breaks `submit()` calls in older KOReader setups.
+
+- Fixed: Static UI during large library operations.
+- Fixed: Excessive I/O from frequent logger open/close calls.
 
 ## 2. CURRENT OBJECTIVE
-- [x] Main Goal: Replace broken `AsyncTask` fallback in `main.lua` and `booklore_api_client.lua`.
-- [x] Context: Plugin crashed on the first library scan attempt due to `attempt to call method 'submit' (a nil value)`.
+
+- [x] Implement UI updates in `syncFromBookloreShelf()` and `scanLibrary()`
+- [x] Implement MD5 hash caching bypass
+- [x] Implement SQLite transaction wrapping for bulk operations
+- [x] Optimize File Logger I/O with persistent file handle
+- [x] Ensure proper lifecycle management for database and logger
+- [x] Implement Beta Fixes (Token Recovery, Safe UI Dispatch, Background Sync)
 
 ## 3. CRITICAL FILE MAP
-*(The AI must maintain this list. Add files here before editing them.)*
+
 - `bookloresync.koplugin/main.lua`
+- `bookloresync.koplugin/booklore_database.lua`
+- `bookloresync.koplugin/booklore_file_logger.lua`
 - `bookloresync.koplugin/booklore_api_client.lua`
 
 ## 4. CHANGE LOG (Newest Top)
-- **2026-02-20**: Fixed `AsyncTask` fallback implementation and appended `:submit()` to all `AsyncTask:new` instantiations in `main.lua` and `booklore_api_client.lua`.
+
+- **2026-02-20**: [Antigravity] Implemented safe UI dispatch in loginBooklore, 401/403 token recovery in API endpoints, and non-blocking background sync. Tested changes successfully.
+- **2026-02-20**: Implemented SQLite transaction wrapping and File Logger I/O optimization.
+- **2026-02-20**: Added MD5 hash caching bypass and dynamic UI updates in `main.lua`.
+- **2026-02-20**: Initialized branch with Deep Dive and implementation plan.
