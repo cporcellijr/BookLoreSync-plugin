@@ -479,7 +479,24 @@ function APIClient:submitSessionBatch(book_id, book_type, sessions)
     }
     
     -- Submit batch
-    local success, code, response = self:request("POST", "/api/v1/reading-sessions/batch", payload)
+    local login_success, token = self:getOrRefreshBearerToken(self.username, self.password)
+    local headers = nil
+    if login_success then
+        headers = { ["Authorization"] = "Bearer " .. token }
+    end
+
+    local success, code, response = self:request("POST", "/api/v1/reading-sessions/batch", payload, headers)
+    
+    -- Retry with fresh token if 401/403
+    if not success and (code == 401 or code == 403) and self.username and self.password then
+        self:logWarn("BookloreSync API: Token rejected, refreshing and retrying batch submission")
+        if self.db then self.db:deleteBearerToken(self.username) end
+        local refresh_success, new_token = self:getOrRefreshBearerToken(self.username, self.password, true)
+        if refresh_success then
+            headers = { ["Authorization"] = "Bearer " .. new_token }
+            success, code, response = self:request("POST", "/api/v1/reading-sessions/batch", payload, headers)
+        end
+    end
     
     if success then
         self:logInfo("BookloreSync API: Batch submitted successfully -", #sessions, "sessions")

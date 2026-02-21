@@ -24,6 +24,7 @@
 
 ## 2. CURRENT OBJECTIVE
 
+- [x] Fix 403 Forbidden in submitSessionBatch
 - [x] Implement UI updates in `syncFromBookloreShelf()` and `scanLibrary()`
 - [x] Implement MD5 hash caching bypass
 - [x] Implement SQLite transaction wrapping for bulk operations
@@ -40,6 +41,7 @@
 
 ## 4. CHANGE LOG (Newest Top)
 
+- **2026-02-21**: [Antigravity] Fixed 403 Forbidden in submitSessionBatch by adding Bearer token and 401/403 retry logic.
 - **2026-02-20**: [Antigravity] Implemented safe UI dispatch in loginBooklore, 401/403 token recovery in API endpoints, and non-blocking background sync. Tested changes successfully.
 - **2026-02-20**: Implemented SQLite transaction wrapping and File Logger I/O optimization.
 - **2026-02-20**: Added MD5 hash caching bypass and dynamic UI updates in `main.lua`.
