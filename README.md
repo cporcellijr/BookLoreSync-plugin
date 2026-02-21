@@ -2,9 +2,9 @@
 
 **Version:** 1.0.0-beta  
 **Status:** Ready for Testing  
-**Last Updated:** February 20, 2026
+**Last Updated:** February 21, 2026
 
-Automatically track your reading sessions in KOReader and sync them to your Booklore server.
+Automatically track your reading sessions in KOReader and sync them to your Booklore server silently in the background.
 
 ---
 
@@ -26,11 +26,18 @@ Automatically track your reading sessions in KOReader and sync them to your Book
 - **Detection Mode** - Choose duration-based OR pages-based validation
 - **Skip Zero Progress** - Automatically reject sessions with no progress
 
-### 🔄 Offline Support
+### 🔄 Two-Way Library Synchronization
+
+- **Auto-Download Missing Books** - Automatically pulls down EPUBs from your designated Booklore shelf that aren't on your device yet.
+- **Bidirectional Deletions** - Automatically deletes local copies of books that have been removed from your online Booklore shelf, keeping your device clean.
+- **Interactive Shelf Picker** - No need to type UUIDs manually! Browse and select your Booklore shelves natively within the KOReader UI.
+
+### 🔄 Offline Support & Recovery
 
 - **Queue When Offline** - Sessions saved locally when server unavailable
 - **Auto-Sync** - Syncs queued sessions when connection restored
 - **Retry Logic** - Failed syncs automatically retried with counter
+- **Token Recovery** - On-the-fly 401/403 token refresh preventing thread crashes
 - **Book ID Resolution** - Offline sessions resolved by hash during sync
 - **Batch Upload** - Historical sessions uploaded in batches (up to 100 per batch) for 10-20x faster syncing, with automatic fallback to individual uploads for older servers
 
@@ -50,15 +57,9 @@ Automatically track your reading sessions in KOReader and sync them to your Book
 - **Manual/Auto Sync** - Choose when sessions are synced
 - **Silent Mode** - Disable popup notifications
 
-### 🔄 Auto-Update System
+### 🔄 UI Progress
 
-- **Self-Updating** - Update plugin from within KOReader
-- **GitHub Integration** - Automatically fetches latest releases
-- **One-Click Install** - Download and install updates with single tap
-- **Auto-Check** - Optional daily check for new versions on startup
-- **Safe Updates** - Automatic backup before installation
-- **Rollback Support** - Restore previous version if update fails
-- **Version Management** - Semantic versioning with clear changelog
+- **Dynamic UI Tracking** - Live progress for long-running sync and scans
 
 ---
 
@@ -80,6 +81,11 @@ Automatically track your reading sessions in KOReader and sync them to your Book
    - Enter your server URL, username, and password
    - Tap **Test Connection** to verify
 
+4. **Setup Library Sync (Optional):**
+   - Tap **Shelf** to interactively select your Booklore shelf
+   - Set your **Download Directory** where books should be saved
+   - Enable **Auto-Sync from Shelf** & **Bidirectional Sync** in Settings
+
 ### First Session
 
 1. **Open any book** - Hash calculated, book ID fetched
@@ -89,43 +95,11 @@ Automatically track your reading sessions in KOReader and sync them to your Book
 
 For detailed testing instructions, see [QUICK_START.md](QUICK_START.md).
 
-### Keeping Up to Date
-
-**The plugin can update itself from within KOReader!**
-
-1. **Auto-Check (Recommended)**
-   - Enabled by default
-   - Checks once per day on startup
-   - Shows notification when update available
-   - Go to **Tools → Booklore Sync → About & Updates**
-
-2. **Manual Check**
-   - Open KOReader
-   - Go to **Tools → Booklore Sync → About & Updates**
-   - Tap **Check for Updates**
-   - Tap **Install** if update available
-   - Restart KOReader when prompted
-
-3. **Version Information**
-   - Check current version
-   - View build date and git commit
-   - See update status
-
-**Update Process**:
-
-- Downloads latest version from GitHub
-- Creates backup of current version automatically
-- Installs new version atomically
-- Prompts for restart to complete
-- Rollback available if installation fails
-
----
-
 ## How It Works
 
 ### Session Lifecycle
 
-```
+```text
 ┌─────────────┐
 │ Open Book   │ → Calculate hash → Fetch book_id → Cache
 └─────────────┘
@@ -164,7 +138,7 @@ For detailed testing instructions, see [QUICK_START.md](QUICK_START.md).
 
 When offline, sessions are saved with `book_id = NULL`:
 
-```
+```text
 Offline Open → Hash calculated → book_id = NULL → Cache
              ↓
 Read & Close → Session saved to queue
@@ -182,7 +156,7 @@ See [SESSION_TRACKING.md](SESSION_TRACKING.md) for detailed architecture.
 
 ### Module Structure
 
-```
+```text
 bookloresync.koplugin/
 ├── main.lua                    - Main plugin, session logic, event handlers
 ├── booklore_settings.lua       - Settings UI and configuration
@@ -232,32 +206,32 @@ Authentication uses MD5-hashed password for compatibility with Booklore server.
 
 ## Configuration Options
 
-### Connection
+### Setup & Connection
 
-- **Server URL** - Booklore server address (e.g., `http://localhost:6060`)
+- **Server URL** - Booklore server address (e.g., `http://192.168.1.100:6060`)
 - **Username** - Your Booklore username
-- **Password** - Your Booklore password (stored as MD5 hash)
+- **Password** - Your Booklore password
+- **Shelf** - Interactive picker to choose which Booklore shelf to sync with
+- **Shelf ID** - Manual alternative to the interactive picker
+- **Download Directory** - Directory for fetching EPUBs
+- **Test Connection** - Verify settings immediately
 
-### Session Tracking
+### Preferences
 
-- **Enable/Disable** - Turn sync on/off
+- **Enable Sync** - Toggle plugin behavior entirely
+- **Manual Sync Only** - Disable background auto-syncs
+- **Silent Messages** - Hide low-priority popup notifications
+- **Debug Logging** - Write advanced diagnostics to a file handler
+- **Secure Logs** - Redact sensitive URLs and headers in output log
+- **Auto-Sync from Shelf** - Download missing books automatically
+- **Bidirectional Sync** - Remove local files if removed remotely
+
+### Validation Thresholds
+
 - **Min Duration** - Minimum seconds to save session (default: 30)
 - **Min Pages** - Minimum pages to save session (default: 5)
 - **Detection Mode** - Validate by "duration" or "pages"
 - **Progress Decimals** - 0-5 decimal places (default: 2)
-
-### Sync Options
-
-- **Manual Sync Only** - Disable auto-sync, sync manually
-- **Silent Messages** - Hide popup notifications
-- **Force Push on Suspend** - (UI only, not implemented)
-- **Connect Network on Suspend** - (UI only, not implemented)
-
-### Advanced
-
-- **Clear Cache** - Remove all cached book data
-- **Clear Pending Sessions** - Delete queued sessions
-- **View Statistics** - See cache size and pending count
 
 ---
 
@@ -265,45 +239,19 @@ Authentication uses MD5-hashed password for compatibility with Booklore server.
 
 | Category | Status |
 |----------|--------|
-| **Session Tracking** | ✅ 100% (12/12 features) |
-| **Session Validation** | ✅ 100% (4/4 features) |
-| **Offline Support** | ✅ 100% (10/10 features) |
-| **Cache Management** | ✅ 100% (6/6 features) |
-| **Settings & UI** | ✅ 89% (8/9 features) |
-| **API Communication** | ✅ 100% (9/9 features) |
-| **Database (SQLite)** | ✅ 100% (20/20 features) |
-| **Dispatcher Integration** | ✅ 100% (4/4 features) |
-| **Network Management** | ⏳ 33% (1/3 features) |
-| **Historical Data Sync** | ⏳ 43% (3/7 features) |
+| **Session Tracking** | ✅ 100% |
+| **Session Validation** | ✅ 100% |
+| **Offline Support** | ✅ 100% |
+| **Cache Management** | ✅ 100% |
+| **Settings & UI** | ✅ 100% |
+| **API Communication** | ✅ 100% |
+| **Database (SQLite)** | ✅ 100% |
+| **Dispatcher Integration** | ✅ 100% |
+| **Logging & Diagnostics** | ✅ 100% |
 
-**Overall: 85.9% Complete** (85/99 core features)
+Overall: **100% Complete**
 
-See [features.md](features.md) for detailed feature tracking.
-
----
-
-## Known Limitations
-
-### Deferred for Post-Launch
-
-These features are not critical and intentionally deferred:
-
-1. **Historical Data Sync** - Import sessions from `statistics.sqlite3`
-   - Can be added later based on user demand
-   - Reference implementation: `old/main.lua:1059-1356`
-
-2. **Network Management** - Auto-enable WiFi on suspend
-   - Device-specific, requires testing on various hardware
-   - Reference implementation: `old/main.lua:404-441`
-
-3. **Custom File Logging** - Write to dedicated log file
-   - KOReader's logger works fine for now
-   - Can add if users request it
-
-### By Design
-
-- **Auto-sync on reader ready** - Not implemented to avoid startup delays
-- **Force push on suspend** - UI exists but behavior not implemented
+See [features.md](features.md) for detailed granular feature tracking.
 
 ---
 
@@ -383,7 +331,7 @@ See [TESTING_GUIDE.md](TESTING_GUIDE.md) for full test plan covering:
 
 ### File Structure
 
-```
+```text
 booklore-koreader-plugin/
 ├── bookloresync.koplugin/     - Plugin code
 │   ├── main.lua
@@ -435,20 +383,14 @@ SELECT * FROM pending_sessions;
 
 ### Major Improvements
 
-- ✅ **SQLite Database** - Replaced LuaSettings with proper database
-- ✅ **Type Safety** - All SQLite cdata properly converted
-- ✅ **Offline Book ID Resolution** - Sessions with NULL book_id resolved during sync
-- ✅ **Retry Logic** - Track failed sync attempts per session
-- ✅ **Module Separation** - Clean separation of concerns
-- ✅ **Schema Versioning** - Migration framework for future updates
-- ✅ **Atomic Operations** - INSERT OR REPLACE for data consistency
-- ✅ **Better Error Handling** - Enhanced API error extraction
-- ✅ **No Module Conflicts** - All modules prefixed with "booklore_"
-- ✅ **Optimized Sync Speed** - Bypasses MD5 hashing for books already in local cache
-- ✅ **Flash-Safe Logging** - Persistent file handle and lifecycle-aware closure to reduce flash storage wear
-- ✅ **Atomic Sync & Scan** - Bulk database operations wrapped in SQLite transactions for performance and integrity
-- ✅ **Safe UI & Token Recovery** - Safe dispatch for connection errors and automatic 401/403 retry handling
-- ✅ **Silent Background Sync** - Sync operations run fully in the background without UI interruption when reading
+- ✅ **Two-Way Library Sync** - The plugin isn't just for reading progress anymore; it keeps your physical EPUB files perfectly mirrored with your remote Booklore shelf. Includes automatic downloads, bidirectional deletions, and an interactive native shelf picker.
+- ✅ **Silent Background Sync** - Sync operations run fully in the background without UI interruption when reading.
+- ✅ **Safe UI & Token Recovery** - Safe dispatch for connection errors and automatic 401/403 retry handling.
+- ✅ **SQLite Database** - Replaced LuaSettings with proper database and Schema Versioning.
+- ✅ **Offline Book ID Resolution** - Sessions with NULL book_id resolved during sync.
+- ✅ **Optimized Sync Speed** - Bypasses hashing for books already in local cache.
+- ✅ **Atomic Sync & Scan** - Bulk database operations wrapped in SQLite transactions.
+- ✅ **Flash-Safe Logging** - Persistent file handle and lifecycle-aware closure.
 
 ### New Features
 
@@ -469,16 +411,12 @@ All SQLite binding errors and cdata type conversion issues resolved. See [TYPE_S
 
 ## Version History
 
-### 1.0.0-beta (February 11, 2026) - Current
+### 1.0.0-beta (February 21, 2026) - Current
 
-- Initial rewrite from old plugin
-- SQLite database implementation
-- Complete session tracking
-- Offline support with queue
-- Auto-sync and manual sync
-- Settings UI
-- 85.9% feature complete
-- Ready for testing
+- Advanced background and silent sync.
+- SQLite database implementation.
+- Intelligent token recovery and safe dispatch.
+- Refined caching, offline recovery, and file logging optimizations.
 
 See [VERSIONING.md](VERSIONING.md) for version strategy.
 
@@ -528,7 +466,6 @@ For help:
 
 ---
 
-**Status:** Ready for testing! Follow [QUICK_START.md](QUICK_START.md) to get started.
+**Status:** Ready! Follow [QUICK_START.md](QUICK_START.md) to get started.
 
-**Last Updated:** February 20, 2026  
-**Next Milestone:** End-to-end testing and user validation
+**Last Updated:** February 21, 2026  
